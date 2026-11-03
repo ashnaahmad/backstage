@@ -1,0 +1,18 @@
+diff --git a/src/daemon/server.ts b/src/daemon/server.ts
+index d5300ac..b7adb48 100644
+--- a/src/daemon/server.ts
++++ b/src/daemon/server.ts
+@@ -1286,9 +1286,13 @@ export class DaemonServer {
+     }
+   }
+ 
++  // Harness: a terminal also moves with switch-client (a sidebar row, a ccmux jump, the Windows tab
++  // row), which runs neither select hook: without these the active pane stayed where it was.
+   private static readonly ACTIVE_PANE_HOOKS = [
+     "after-select-pane[50]",
+     "after-select-window[50]",
++    "session-window-changed[50]",
++    "client-session-changed[50]",
+   ] as const;
+ 
+   /**

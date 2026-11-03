@@ -1,0 +1,33 @@
+{
+  "$ref": "#/definitions/PromptRequest",
+  "definitions": {
+    "PromptRequest": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "steer",
+            "followUp",
+            "follow_up"
+          ],
+          "default": "prompt"
+        },
+        "steer": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

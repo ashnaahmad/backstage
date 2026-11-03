@@ -1,0 +1,22 @@
+--- a/skills/playwright-browser/SKILL.md
++++ b/skills/playwright-browser/SKILL.md
+@@ -93,7 +93,7 @@
+ ```bash
+ node "$SKILL_DIR/scripts/pw.js" eval '() => document.title'
+ node "$SKILL_DIR/scripts/pw.js" console
+-node "$SKILL_DIR/scripts/pw.js" network
++node "$SKILL_DIR/scripts/pw.js" requests
+ ```
+ 
+ ### Save artifacts
+--- a/skills/playwright-browser/references/commands.md
++++ b/skills/playwright-browser/references/commands.md
+@@ -104,7 +104,7 @@
+ 
+ ```bash
+ node "$SKILL_DIR/scripts/pw.js" console
+-node "$SKILL_DIR/scripts/pw.js" network
++node "$SKILL_DIR/scripts/pw.js" requests
+ ```
+ 
+ ### Auth / state

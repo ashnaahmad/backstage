@@ -1,0 +1,9 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+node_modules/
+.pi/npm/
+.pi/git/
+.quality-state/
+__pycache__/

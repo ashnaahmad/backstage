@@ -1,0 +1,154 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "pi-tick-aws: launch Lambda and Scheduler role for one-shot scheduled cloud agent tasks"
+
+# Reuses the pi-cloud-agents core stack's bucket, runner image and MicroVM execution role.
+# Schedules are created per task by scheduled/cli.ts in the group below; none are defined here.
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: "pi-cloud-agents core bucket (core stack output BucketName)"
+  ExecutionRoleArn:
+    Type: String
+    Description: "MicroVM execution role (core stack output ExecutionRoleArn)"
+  ImageName:
+    Type: String
+    Default: "pi-cloud-agents-runner"
+  CodeKey:
+    Type: String
+    Description: "S3 key of dist/scheduled/launcher.zip in BucketName"
+
+Resources:
+  LauncherLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-launcher"
+      RetentionInDays: 14
+
+  LauncherRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: launcher
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${LauncherLogGroup.Arn}"
+              - Sid: ReadTasks
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:aws:s3:::${BucketName}/tick/tasks/*"
+              - Sid: WriteLaunchRecordsManifestsAndIndex
+                Effect: Allow
+                Action: s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${BucketName}/tick/tasks/*"
+                  - !Sub "arn:aws:s3:::${BucketName}/runs/*"
+                  - !Sub "arn:aws:s3:::${BucketName}/index/*"
+              - Sid: RunAndReachMicrovms
+                Effect: Allow
+                Action:
+                  - lambda:RunMicrovm
+                  - lambda:GetMicrovm
+                  - lambda:CreateMicrovmAuthToken
+                  - lambda:TerminateMicrovm
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm:*"
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${ImageName}"
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${ImageName}:*"
+              # ListMicrovms is not resource-scoped; the launcher uses it for the concurrency limit.
+              - Sid: ListMicrovms
+                Effect: Allow
+                Action: lambda:ListMicrovms
+                Resource: "*"
+              - Sid: PassAwsNetworkConnectors
+                Effect: Allow
+                Action: lambda:PassNetworkConnector
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:*"
+              - Sid: PassExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Ref ExecutionRoleArn
+                Condition:
+                  StringEquals:
+                    "iam:PassedToService": "lambda.amazonaws.com"
+
+  LauncherFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-launcher"
+      Description: "Starts a scheduled pi-cloud-agents run and submits its prompt"
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: index.handler
+      MemorySize: 512
+      # RunMicrovm plus up to 5 minutes of readiness polling; the run itself continues in its VM.
+      Timeout: 600
+      Role: !GetAtt LauncherRole.Arn
+      Code:
+        S3Bucket: !Ref BucketName
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          PI_CLOUD_BUCKET: !Ref BucketName
+      LoggingConfig:
+        LogGroup: !Ref LauncherLogGroup
+
+  # Scheduler invokes asynchronously; no Lambda-side retries. The launch record's conditional
+  # create already absorbs Scheduler's own redeliveries.
+  LauncherInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref LauncherFunction
+      Qualifier: "$LATEST"
+      MaximumRetryAttempts: 0
+      MaximumEventAgeInSeconds: 900
+
+  ScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties:
+      Name: pi-tick
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+            # Scheduler's confused-deputy keys name the schedule group, not the schedule.
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Ref AWS::AccountId
+                "aws:SourceArn": !GetAtt ScheduleGroup.Arn
+      Policies:
+        - PolicyName: invoke-launcher
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt LauncherFunction.Arn
+                  - !Sub "${LauncherFunction.Arn}:*"
+
+Outputs:
+  LauncherFunctionArn:
+    Value: !GetAtt LauncherFunction.Arn
+  SchedulerRoleArn:
+    Value: !GetAtt SchedulerRole.Arn
+  ScheduleGroupName:
+    Value: !Ref ScheduleGroup
+  BucketName:
+    Value: !Ref BucketName

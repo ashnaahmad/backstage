@@ -1,0 +1,10 @@
+{
+  "askClaude": {
+    "enabled": false
+  },
+  "provider": {
+    "strictMcpConfig": true,
+    "autoMemoryEnabled": false,
+    "longContextExtraUsage": false
+  }
+}

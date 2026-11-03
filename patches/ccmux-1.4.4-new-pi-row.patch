@@ -1,0 +1,296 @@
+diff --git a/src/daemon/spawn-command.test.ts b/src/daemon/spawn-command.test.ts
+index add98d7..6964af2 100644
+--- a/src/daemon/spawn-command.test.ts
++++ b/src/daemon/spawn-command.test.ts
+@@ -376,6 +376,11 @@ describe("spawnCommandTooLarge", () => {
+ });
+ 
+ describe("buildTmuxSpawnArgv", () => {
++  it("passes a directory with # literally (tmux expands formats in -c)", () => {
++    const argv = buildTmuxSpawnArgv({ split: false, cwd: "/w/#{session_name} a##b" });
++    expect(argv[argv.indexOf("-c") + 1]).toBe("/w/##{session_name} a####b");
++  });
++
+   // These argv are executed verbatim. `new-window -t %pane` fails with
+   // "can't specify pane here" and `new-window -t @win` without `-a`
+   // fails with "index in use", so both shapes are pinned.
+diff --git a/src/daemon/spawn-command.ts b/src/daemon/spawn-command.ts
+index 478880b..d929328 100644
+--- a/src/daemon/spawn-command.ts
++++ b/src/daemon/spawn-command.ts
+@@ -896,7 +896,9 @@ export function buildTmuxSpawnArgv(input: TmuxSpawnArgvInput): string[] {
+     else if (placement?.kind === "session") argv.push("-t", `${placement.id}:`);
+   }
+ 
+-  argv.push("-c", cwd, "-P", "-F", "#{pane_id}");
++  // tmux expands formats in -c, so a directory with `#` in its name would
++  // start the pane elsewhere; `##` is tmux's literal `#`.
++  argv.push("-c", cwd.replaceAll("#", "##"), "-P", "-F", "#{pane_id}");
+   return argv;
+ }
+ 
+diff --git a/src/tui/App.tsx b/src/tui/App.tsx
+index adde621..e4a53fb 100644
+--- a/src/tui/App.tsx
++++ b/src/tui/App.tsx
+@@ -2640,6 +2640,51 @@ export function App(props: AppProps) {
+    * before that point. Every field is optional — an older daemon answers
+    * without any of them (see the stale-daemon check in `reportMove`).
+    */
++  /**
++   * A `+ New Pi` row: Pi in that group's exact directory, in a new window of
++   * this session, which the client then switches to. The same request the
++   * new-session dialog posts, with no dialog in between; one at a time, so a
++   * double click opens one window.
++   */
++  let newPiInFlight = false;
++  async function spawnPiIn(cwd: string): Promise<void> {
++    if (newPiInFlight) return;
++    if (!ensureSameServer()) return;
++    newPiInFlight = true;
++    try {
++      // A sidebar alone in its window has no other pane to resolve; its own
++      // pane still names the session, and a new window never splits it.
++      const callerPane =
++        (await resolveSpawnPane()) ?? process.env.TMUX_PANE ?? null;
++      const response = await fetch(`${getDaemonUrl()}/spawn`, {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({
++          agent: "pi",
++          cwd,
++          split: false,
++          callerPane: callerPane ?? undefined,
++          detach: false,
++        }),
++      });
++      const body = (await response
++        .json()
++        .catch(() => null)) as SpawnBody | null;
++      if (!response.ok || !body?.paneId) {
++        store.actions.showToast(
++          `New Pi failed: ${body?.error ?? response.statusText}`,
++          4000,
++        );
++        return;
++      }
++      notifyActivePane(body.paneId);
++    } catch (err) {
++      store.actions.showToast(`New Pi failed: ${errText(err)}`, 4000);
++    } finally {
++      newPiInFlight = false;
++    }
++  }
++
+   interface SpawnBody {
+     paneId?: string;
+     error?: string;
+@@ -4174,6 +4219,7 @@ export function App(props: AppProps) {
+             socketError={store.state.tmuxSocketError}
+             onActivate={handleRowActivate}
+             onContextMenu={handleRowContextMenu}
++            onNewPi={spawnPiIn}
+             onRowAnchor={(resolve) => (rowAnchor = resolve)}
+           />
+           <Show when={!props.sidebar && store.state.showPreview}>
+diff --git a/src/tui/components/GroupHeader.test.tsx b/src/tui/components/GroupHeader.test.tsx
+index fe4067d..b142fc0 100644
+--- a/src/tui/components/GroupHeader.test.tsx
++++ b/src/tui/components/GroupHeader.test.tsx
+@@ -217,4 +217,52 @@ describe("GroupHeader", () => {
+     expect(activateCalls).toBe(1);
+     expect(contextMenuCalls).toBe(0);
+   });
++
++  it("draws a [ + New Pi ] button between blank lines; only the button starts Pi", async () => {
++    let activateCalls = 0;
++    let newPiCalls = 0;
++    setup = await testRender(
++      () => (
++        <GroupHeader
++          label="~/work/my repo"
++          count={1}
++          collapsed={false}
++          selected={false}
++          members={[]}
++          newPi
++          onActivate={() => {
++            activateCalls++;
++          }}
++          onNewPi={() => {
++            newPiCalls++;
++          }}
++        />
++      ),
++      { width: 40, height: 5 },
++    );
++    await setup.renderOnce();
++    const lines = setup.captureCharFrame().split("\n");
++    expect(lines[1]!.trim()).toBe("");
++    expect(lines[2]!.trimEnd()).toBe("   [ + New Pi ]");
++    expect(lines[3]!.trim()).toBe("");
++    // Blank lines, and the button's line beside the button, do nothing.
++    for (const [x, y] of [[5, 1], [5, 3], [1, 2], [2, 2], [15, 2], [30, 2]] as const) {
++      await setup.mockMouse.click(x, y, MouseButtons.LEFT);
++    }
++    expect(newPiCalls).toBe(0);
++    expect(activateCalls).toBe(0);
++    // Its first and last characters start Pi; the heading still folds.
++    await setup.mockMouse.click(3, 2, MouseButtons.LEFT);
++    await setup.mockMouse.click(14, 2, MouseButtons.LEFT);
++    expect(newPiCalls).toBe(2);
++    expect(activateCalls).toBe(0);
++    await setup.mockMouse.click(3, 0, MouseButtons.LEFT);
++    expect(activateCalls).toBe(1);
++  });
++
++  it("draws no + New Pi row unless asked", async () => {
++    const frame = await renderHeader({});
++    expect(frame).not.toContain("New Pi");
++  });
+ });
++
+diff --git a/src/tui/components/GroupHeader.tsx b/src/tui/components/GroupHeader.tsx
+index a39dbd7..75c7d02 100644
+--- a/src/tui/components/GroupHeader.tsx
++++ b/src/tui/components/GroupHeader.tsx
+@@ -23,6 +23,10 @@ interface GroupHeaderProps {
+   dimmed?: boolean;
+   onActivate?: () => void;
+   onContextMenu?: (event: MouseEvent) => void;
++  /** Draws a `[ + New Pi ]` button under the heading, between two blank lines
++   *  (three lines, counted by itemVisualHeight). */
++  newPi?: boolean;
++  onNewPi?: () => void;
+ }
+ 
+ function staticDots(
+@@ -54,6 +58,8 @@ function staticDots(
+   return dots;
+ }
+ 
++const NEW_PI_LABEL = "[ + New Pi ]";
++
+ export const GroupHeader: Component<GroupHeaderProps> = (props) => {
+   const dims = useSharedTerminalDimensions();
+   const c = (color: string) => (props.dimmed ? theme.border : color);
+@@ -132,6 +138,7 @@ export const GroupHeader: Component<GroupHeaderProps> = (props) => {
+   });
+ 
+   return (
++    <>
+     <box
+       width="100%"
+       height={1}
+@@ -158,5 +165,24 @@ export const GroupHeader: Component<GroupHeaderProps> = (props) => {
+         </For>
+       </text>
+     </box>
++    <Show when={props.newPi}>
++      {/* Blank lines keep the button clear of the heading (fold, menu) and
++          the first session (switch); only the button itself is clickable. */}
++      <box height={1} />
++      <box flexDirection="row" height={1} paddingLeft={3}>
++        <box
++          width={NEW_PI_LABEL.length}
++          height={1}
++          flexShrink={0}
++          onMouseDown={(event) => {
++            if (event.button === MouseButton.LEFT) props.onNewPi?.();
++          }}
++        >
++          <text fg={c(theme.green)}>{NEW_PI_LABEL}</text>
++        </box>
++      </box>
++      <box height={1} />
++    </Show>
++    </>
+   );
+ };
+diff --git a/src/tui/components/SessionList.tsx b/src/tui/components/SessionList.tsx
+index a69c717..0f1b837 100644
+--- a/src/tui/components/SessionList.tsx
++++ b/src/tui/components/SessionList.tsx
+@@ -97,6 +97,8 @@ interface SessionListProps {
+   socketError?: TmuxSocketError | null;
+   onActivate?: (item: FlatItem, index: number) => void;
+   onContextMenu?: (item: FlatItem, index: number, event: MouseEvent) => void;
++  /** Starts Pi in a cwd group's exact directory, from its `+ New Pi` row. */
++  onNewPi?: (cwd: string) => void;
+   /**
+    * Hands the parent a way to ASK where a row currently sits on screen, for
+    * the keyboard path that opens a row menu without a pointer to anchor on.
+@@ -411,6 +413,8 @@ export const SessionList: Component<SessionListProps> = (props) => {
+             dimmed={props.dimmed}
+             onActivate={onActivate}
+             onContextMenu={onContextMenu}
++            newPi={item.newPiCwd !== undefined}
++            onNewPi={() => item.newPiCwd && props.onNewPi?.(item.newPiCwd)}
+           />
+         </>
+       );
+diff --git a/src/tui/utils/grouping.test.ts b/src/tui/utils/grouping.test.ts
+index 761ed40..36ff40b 100644
+--- a/src/tui/utils/grouping.test.ts
++++ b/src/tui/utils/grouping.test.ts
+@@ -1006,3 +1006,26 @@ describe("buildFlatItems with the attention band off", () => {
+     ).toEqual(["# alpha", "# beta", "c"]);
+   });
+ });
++
++describe("+ New Pi rows", () => {
++  it("are offered only by cwd headers, for their exact directory", () => {
++    const sessions = [
++      toFiltered(mockSession({ id: "a", cwd: "/work/my repo", paneCwd: "/work/my repo", project: "repo" })),
++      toFiltered(mockSession({ id: "b", cwd: "/work/my repo/sub dir", paneCwd: "/work/my repo/sub dir", project: "repo" })),
++    ];
++    const byCwd = buildFlatItems(sessions, "cwd", new Set(), false).filter((i) => i.type === "header");
++    expect(byCwd.map((h) => h.type === "header" && h.newPiCwd).sort()).toEqual(["/work/my repo", "/work/my repo/sub dir"]);
++    const byProject = buildFlatItems(sessions, "project", new Set(), false).filter((i) => i.type === "header");
++    expect(byProject.every((h) => h.type === "header" && h.newPiCwd === undefined)).toBe(true);
++  });
++
++  it("add three lines (blank, button, blank) to their header's height, collapsed or not", () => {
++    const sessions = [
++      toFiltered(mockSession({ id: "a", cwd: "/a", paneCwd: "/a" })),
++      toFiltered(mockSession({ id: "b", cwd: "/b", paneCwd: "/b" })),
++    ];
++    const items = buildFlatItems(sessions, "cwd", new Set(["/b"]), false);
++    expect(itemVisualHeight(items, 0)).toBe(4); // header + blank, button, blank
++    expect(itemVisualHeight(items, 2)).toBe(5); // divider, header + blank, button, blank
++  });
++});
+diff --git a/src/tui/utils/grouping.ts b/src/tui/utils/grouping.ts
+index 1c5eea2..9560e80 100644
+--- a/src/tui/utils/grouping.ts
++++ b/src/tui/utils/grouping.ts
+@@ -76,6 +76,9 @@ export type FlatItem =
+       count: number;
+       /** Present only when a project header unambiguously names one repository. */
+       repoRoot?: string;
++      /** The exact directory the `[ + New Pi ]` button under a cwd header
++       *  starts Pi in; the button and a blank line on each side add 3 lines. */
++      newPiCwd?: string;
+       collapsed: boolean;
+       /** Raw member references, not a precomputed summary. The status summary
+        * is derived downstream in the header's own reactive scope so this memo
+@@ -374,6 +377,9 @@ export function buildFlatItems(
+       collapsed: isCollapsed,
+       members,
+       repoRoot,
++      // Only cwd grouping keys a group by one exact directory; project
++      // grouping may key it by the repository root instead.
++      newPiCwd: groupBy === "cwd" && key.startsWith("/") ? key : undefined,
+     });
+     if (!isCollapsed) {
+       for (const fs of members)
+@@ -415,7 +421,8 @@ export function itemVisualHeight(
+   lineCount?: SessionLineCount,
+ ): number {
+   const item = items[index];
+-  if (item.type === "header" && index > 0) return 2;
++  if (item.type === "header")
++    return (index > 0 ? 2 : 1) + (item.newPiCwd ? 3 : 0);
+   if (item.type === "session") {
+     if (!lineCount) return 2;
+     // A row always draws its identity line, whatever the caller computes.

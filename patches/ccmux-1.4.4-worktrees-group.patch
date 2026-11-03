@@ -1,0 +1,211 @@
+diff --git a/src/tui/store.ts b/src/tui/store.ts
+index 4b8aebb..a2511cc 100644
+--- a/src/tui/store.ts
++++ b/src/tui/store.ts
+@@ -52,6 +52,7 @@ import {
+   buildFlatItems,
+   isSyntheticGroupKey,
+   getGroupKey,
++  inAttentionBand,
+   groupSessions,
+   sortGroups,
+   VALID_GROUP_BY,
+@@ -1535,7 +1536,7 @@ export function createTUIStore(options: TUIStoreOptions = {}) {
+ 
+   /** A waiting row sits in the band, outside its home group, only while the band is on. */
+   function inBand(session: EnrichedSession): boolean {
+-    return attentionBand && session.status === "waiting";
++    return inAttentionBand(session, attentionBand);
+   }
+ 
+   function activeGroupKeys(): Set<string> {
+@@ -1580,7 +1581,8 @@ export function createTUIStore(options: TUIStoreOptions = {}) {
+       setState("previewFocused", false);
+       return;
+     }
+-    if (!attentionBand) return;
++    if (!inAttentionBand({ ...selected, status: "waiting" }, attentionBand))
++      return;
+     const key = getGroupKey(selected, state.groupBy);
+     if (state.groupBy === "none" || !collapsedGroups().has(key)) return;
+     const expanded = new Set(collapsedGroups());
+diff --git a/src/tui/utils/grouping.test.ts b/src/tui/utils/grouping.test.ts
+index 36ff40b..e7ab311 100644
+--- a/src/tui/utils/grouping.test.ts
++++ b/src/tui/utils/grouping.test.ts
+@@ -10,6 +10,8 @@ import {
+   scrollTarget,
+   sortGroups,
+   groupSessions,
++  isWorktreeSession,
++  WORKTREES_GROUP_KEY,
+   type FilteredSession,
+   type GroupEntry,
+ } from "./grouping";
+@@ -1029,3 +1031,88 @@ describe("+ New Pi rows", () => {
+     expect(itemVisualHeight(items, 2)).toBe(5); // divider, header + blank, button, blank
+   });
+ });
++
++describe("worktrees group (harness)", () => {
++  const wt = (id: string, name: string, overrides: Partial<EnrichedSession> = {}) =>
++    toFiltered(
++      mockSession({
++        id,
++        cwd: `/home/user/code/example-worktrees/${name}`,
++        paneCwd: `/home/user/code/example-worktrees/${name}`,
++        worktreeRoot: `/home/user/code/example-worktrees/${name}`,
++        mainRepoRoot: "/home/user/code/example-monorepo",
++        ...overrides,
++      }),
++    );
++  const main = (id: string, overrides: Partial<EnrichedSession> = {}) =>
++    toFiltered(
++      mockSession({
++        id,
++        cwd: "/home/user/code/example-monorepo",
++        paneCwd: "/home/user/code/example-monorepo",
++        worktreeRoot: "/home/user/code/example-monorepo",
++        mainRepoRoot: "/home/user/code/example-monorepo",
++        ...overrides,
++      }),
++    );
++  // A linked worktree outside a `*-worktrees` folder (a long-lived checkout) keeps its own group.
++  const prospect = toFiltered(
++    mockSession({
++      id: "prospect",
++      cwd: "/home/user/code/demo-project-extra",
++      paneCwd: "/home/user/code/demo-project-extra",
++      worktreeRoot: "/home/user/code/demo-project-extra",
++      mainRepoRoot: "/home/user/code/demo-project",
++    }),
++  );
++  const headers = (items: ReturnType<typeof buildFlatItems>) =>
++    items.flatMap((i) => (i.type === "header" ? [i] : []));
++
++  it("puts every worktree session in one last group, with no New Pi button", () => {
++    const items = buildFlatItems(
++      [wt("a", "gal-1"), main("m"), wt("b", "zzz-task"), prospect],
++      "cwd",
++      new Set(),
++      false,
++      ["\0worktrees", "/home/user/code/demo-project-extra"],
++    );
++    const hs = headers(items);
++    expect(hs.map((h) => h.label)).toEqual([
++      "/home/user/code/demo-project-extra",
++      "/home/user/code/example-monorepo",
++      "worktrees",
++    ]);
++    const last = hs.at(-1)!;
++    expect(last.groupKey).toBe(WORKTREES_GROUP_KEY);
++    expect(last.count).toBe(2);
++    expect(last.newPiCwd).toBeUndefined();
++    expect(hs[0]!.newPiCwd).toBe("/home/user/code/demo-project-extra");
++    expect(hs[1]!.newPiCwd).toBe("/home/user/code/example-monorepo");
++    const rows = items.slice(items.indexOf(last) + 1);
++    expect(rows.map((i) => i.type === "session" && i.filteredSession.session.id)).toEqual(["a", "b"]);
++  });
++
++  it("keeps waiting worktree sessions out of the attention band", () => {
++    const items = buildFlatItems(
++      [wt("a", "gal-1", { status: "waiting" }), main("m", { status: "waiting" })],
++      "cwd",
++      new Set(),
++      false,
++    );
++    const hs = headers(items);
++    expect(hs[0]!.label).toBe("needs attention");
++    expect(hs[0]!.members.map((m) => m.session.id)).toEqual(["m"]);
++    expect(hs.at(-1)!.groupKey).toBe(WORKTREES_GROUP_KEY);
++    expect(isWorktreeSession(prospect.session)).toBe(false);
++  });
++
++  it("collapses like any group and keeps its key in every grouped mode", () => {
++    const items = buildFlatItems([wt("a", "gal-1"), main("m")], "project", new Set([WORKTREES_GROUP_KEY]), false);
++    const last = headers(items).at(-1)!;
++    expect(last.collapsed).toBe(true);
++    expect(last.repoRoot).toBeUndefined();
++    expect(items.at(-1)).toBe(last);
++    expect(getGroupKey(wt("a", "gal-1").session, "session")).toBe(WORKTREES_GROUP_KEY);
++    expect(getGroupKey(wt("a", "gal-1").session, "none")).toBe("");
++  });
++});
+diff --git a/src/tui/utils/grouping.ts b/src/tui/utils/grouping.ts
+index 9560e80..1734261 100644
+--- a/src/tui/utils/grouping.ts
++++ b/src/tui/utils/grouping.ts
+@@ -122,11 +122,35 @@ function panelessGroupKey(session: EnrichedSession): string | null {
+   return null;
+ }
+ 
++/**
++ * Harness: sessions in agent-made worktrees (a folder inside one named `*-worktrees`, such as
++ * `example-worktrees/task-123`). Each has an orchestrating agent, so they never join the attention
++ * band; in grouped views they share one collapsible group, always last, with no New Pi button.
++ */
++export const WORKTREES_GROUP_KEY = "\0worktrees";
++export const WORKTREES_GROUP_LABEL = "worktrees";
++export function isWorktreeSession(session: EnrichedSession): boolean {
++  const path = session.worktreeRoot || session.paneCwd || session.cwd || "";
++  return /\/[^/]+-worktrees\/[^/]+/.test(path);
++}
++
++/** Whether a session shows in the `needs attention` band instead of its group. */
++export function inAttentionBand(
++  session: EnrichedSession,
++  attentionBand = true,
++): boolean {
++  return (
++    attentionBand && session.status === "waiting" && !isWorktreeSession(session)
++  );
++}
++
+ /** Derive the group key for a session based on the groupBy mode */
+ export function getGroupKey(
+   session: EnrichedSession,
+   groupBy: GroupBy,
+ ): string {
++  if (groupBy !== "none" && isWorktreeSession(session))
++    return WORKTREES_GROUP_KEY;
+   // Paneless rows co-locate by cwd under project/cwd grouping (matching real
+   // sessions in the same directory); under session/window grouping they have
+   // no target, so `panelessGroupKey` gives them a deliberate group.
+@@ -156,6 +180,7 @@ export function getGroupKey(
+ 
+ /** Format a group key into a display label */
+ export function getGroupLabel(groupKey: string, groupBy: GroupBy): string {
++  if (groupKey === WORKTREES_GROUP_KEY) return WORKTREES_GROUP_LABEL;
+   if (groupBy === "cwd") {
+     return shortenCwd(groupKey);
+   }
+@@ -284,7 +309,9 @@ export function sortGroups(
+       g.members.reduce((acc, m) => Math.max(acc, m.score ?? 0), 0);
+     ordered.sort((a, b) => best(b) - best(a));
+   }
+-  return ordered;
++  // The worktrees group stays last, whatever pinning or search ranking says.
++  const worktrees = ordered.filter((g) => g.key === WORKTREES_GROUP_KEY);
++  return [...ordered.filter((g) => g.key !== WORKTREES_GROUP_KEY), ...worktrees];
+ }
+ 
+ /**
+@@ -308,7 +335,7 @@ export function buildFlatItems(
+     return Number.isNaN(parsed) ? 0 : parsed;
+   };
+   const inBand = (fs: FilteredSession) =>
+-    attentionBand && fs.session.status === "waiting";
++    inAttentionBand(fs.session, attentionBand);
+   const waiting = filtered
+     .filter(inBand)
+     .sort((a, b) => waitingStartedAt(a) - waitingStartedAt(b));
+@@ -359,7 +386,8 @@ export function buildFlatItems(
+   );
+   for (const { key, members } of sorted) {
+     const isCollapsed = !isSearching && collapsed.has(key);
+-    const repoRoot = groupRepoRoot(members, groupBy);
++    const repoRoot =
++      key === WORKTREES_GROUP_KEY ? undefined : groupRepoRoot(members, groupBy);
+     const tmuxName = (fs: FilteredSession) =>
+       fs.session.tmuxTarget?.split(":")[0];
+     const firstTmux = tmuxName(members[0]!);

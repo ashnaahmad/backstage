@@ -1,0 +1,676 @@
+diff --git a/src/commands/sidebar.test.ts b/src/commands/sidebar.test.ts
+index cbbd045..964373c 100644
+--- a/src/commands/sidebar.test.ts
++++ b/src/commands/sidebar.test.ts
+@@ -15,6 +15,24 @@ import { PANE_FIELD_SEP } from "../lib/tmux-format";
+ const row = (...fields: string[]) => fields.join(PANE_FIELD_SEP);
+ 
+ describe("parseToggleState", () => {
++  it("gives a window shared by grouped sessions one entry and one sidebar", () => {
++    // Format with #{window_id}: the same window, listed once per grouped session.
++    const output = [
++      row("%0", "@1", "pi", "/repo", "1", "1"),
++      row("%1", "@1", "ccmux-sidebar", "/repo", "1", "1"),
++      row("%2", "@2", "pi", "/other", "1", "0"),
++      row("%0", "@1", "pi", "/repo", "1", "0"),
++      row("%1", "@1", "ccmux-sidebar", "/repo", "1", "0"),
++      row("%2", "@2", "pi", "/other", "1", "1"),
++    ].join("\n");
++    const result = parseToggleState(output);
++    expect(result.sidebarPaneIds).toEqual(["%1"]);
++    expect(result.sidebarWindows).toEqual(new Set(["@1"]));
++    expect(result.windows).toEqual(new Map([["@1", "/repo"], ["@2", "/other"]]));
++    // Each window is current in some attached view.
++    expect(result.activeWindows).toEqual(new Set(["@1", "@2"]));
++  });
++
+   it("extracts sidebar panes, windows, and non-sidebar paths", () => {
+     // Format: "#{pane_id}<sep>#{session_name}:#{window_index}<sep>#{pane_title}<sep>#{pane_current_path}<sep>#{session_attached}<sep>#{window_active}"
+     const output = [
+@@ -140,6 +158,11 @@ describe("parseAutoOpenHook", () => {
+ });
+ 
+ describe("parseSidebarPaneIds", () => {
++  it("lists a sidebar shared by grouped sessions once", () => {
++    const output = [row("%1", "ccmux-sidebar"), row("%1", "ccmux-sidebar")].join("\n");
++    expect(parseSidebarPaneIds(output)).toEqual(["%1"]);
++  });
++
+   it("extracts sidebar pane IDs from mixed panes", () => {
+     const output = [
+       row("%0", "zsh"),
+diff --git a/src/commands/sidebar.ts b/src/commands/sidebar.ts
+index 3da303d..b03d6cf 100644
+--- a/src/commands/sidebar.ts
++++ b/src/commands/sidebar.ts
+@@ -200,7 +200,7 @@ export function parseSidebarPaneIds(output: string): string[] {
+   for (const line of output.split("\n")) {
+     if (!line) continue;
+     const [paneId, title] = line.split(PANE_FIELD_SEP);
+-    if (paneId && title === SIDEBAR_PANE_TITLE) ids.push(paneId);
++    if (paneId && title === SIDEBAR_PANE_TITLE && !ids.includes(paneId)) ids.push(paneId);
+   }
+   return ids;
+ }
+@@ -257,7 +257,7 @@ interface ToggleState {
+ 
+ /**
+  * Parse all pane info needed for toggle in a single pass.
+- * Expected format: "#{pane_id}<sep>#{session_name}:#{window_index}<sep>#{pane_title}<sep>#{pane_current_path}<sep>#{session_attached}<sep>#{window_active}"
++ * Expected format: "#{pane_id}<sep>#{window_id}<sep>#{pane_title}<sep>#{pane_current_path}<sep>#{session_attached}<sep>#{window_active}"
+  */
+ export function parseToggleState(output: string): ToggleState {
+   const windows = new Map<string, string | undefined>();
+@@ -279,7 +279,8 @@ export function parseToggleState(output: string): ToggleState {
+     }
+ 
+     if (title === SIDEBAR_PANE_TITLE) {
+-      sidebarPaneIds.push(paneId);
++      // Grouped sessions list one pane once per session.
++      if (!sidebarPaneIds.includes(paneId)) sidebarPaneIds.push(paneId);
+       sidebarWindows.add(target);
+     } else if (!windows.has(target)) {
+       // First non-sidebar pane determines the window's path
+@@ -297,7 +298,9 @@ async function getAllPaneState(): Promise<ToggleState> {
+     "-F",
+     [
+       "#{pane_id}",
+-      "#{session_name}:#{window_index}",
++      // The window id, not session:index: a window shared by grouped sessions (one view per
++      // terminal) is listed once per session, and must get one sidebar, not one per session.
++      "#{window_id}",
+       "#{pane_title}",
+       "#{pane_current_path}",
+       "#{session_attached}",
+diff --git a/src/commands/switch.ts b/src/commands/switch.ts
+index b266b13..7b68053 100644
+--- a/src/commands/switch.ts
++++ b/src/commands/switch.ts
+@@ -3,7 +3,11 @@ import { getDaemonUrl } from "../lib/config";
+ import { daemonBody, readString } from "../lib/daemon-json";
+ import { isSameTmuxServer } from "../lib/tmux-server";
+ import { tmuxArgv } from "../lib/tmux-exec";
+-import { resolveActiveTmuxClientTty } from "../lib/tmux-client";
++import {
++  resolveActiveTmuxClientTty,
++  resolveCurrentTmuxClientTty,
++  targetForClient,
++} from "../lib/tmux-client";
+ import { ensureDaemon } from "./shared";
+ 
+ export function createSwitchCommand(): Command {
+@@ -64,6 +68,8 @@ export function createSwitchCommand(): Command {
+         // explicitly. Inside tmux this is skipped entirely: argv is
+         // unchanged from today's path.
+         const switchArgs = ["switch-client"];
++        // Inside tmux the implicit current client; its own view keeps the jump (grouped views).
++        let switchingTty = process.env.TMUX ? await resolveCurrentTmuxClientTty() : null;
+         if (!process.env.TMUX) {
+           const clientTty = await resolveActiveTmuxClientTty();
+           if (!clientTty) {
+@@ -73,8 +79,9 @@ export function createSwitchCommand(): Command {
+             process.exit(1);
+           }
+           switchArgs.push("-c", clientTty);
++          switchingTty = clientTty;
+         }
+-        switchArgs.push("-t", target);
++        switchArgs.push("-t", switchingTty ? await targetForClient(switchingTty, target) : target);
+ 
+         const proc = Bun.spawn(tmuxArgv(...switchArgs), {
+           stdout: "pipe",
+diff --git a/src/daemon/index.ts b/src/daemon/index.ts
+index 91adaf3..9f44101 100644
+--- a/src/daemon/index.ts
++++ b/src/daemon/index.ts
+@@ -109,6 +109,7 @@ import { isTerminalFrontmost, resolveTerminalBundleId } from "./focus";
+ import {
+   getActiveTmuxClientPid,
+   resolveActiveTmuxClientTty,
++  targetForClient,
+ } from "../lib/tmux-client";
+ import {
+   deliver as libDeliver,
+@@ -292,6 +293,7 @@ export class Daemon {
+       // `notify-jump.ts`); Linux `switch-client` needs no app activation.
+       activateTerminal:
+         process.platform === "darwin" ? activateHostTerminal : undefined,
++      targetForClient,
+     };
+ 
+     // One delivery closure shared by the Notifier and the notification-action
+diff --git a/src/daemon/notify-jump.ts b/src/daemon/notify-jump.ts
+index cc6097d..d36f473 100644
+--- a/src/daemon/notify-jump.ts
++++ b/src/daemon/notify-jump.ts
+@@ -41,6 +41,8 @@ export interface JumpDeps {
+    * caller.
+    */
+   activateTerminal?: () => Promise<void>;
++  /** Pins the pane to the client's own session (grouped views); bare when absent. */
++  targetForClient?: (clientTty: string, target: string) => Promise<string>;
+ }
+ 
+ /**
+@@ -87,7 +89,7 @@ export async function performJump(
+         "-c",
+         clientTty,
+         "-t",
+-        target.pane,
++        (await deps.targetForClient?.(clientTty, target.pane)) ?? target.pane,
+       ),
+       { stdout: "ignore", stderr: "ignore" },
+     );
+diff --git a/src/daemon/pane-discovery.test.ts b/src/daemon/pane-discovery.test.ts
+index 7241da3..8cfa151 100644
+--- a/src/daemon/pane-discovery.test.ts
++++ b/src/daemon/pane-discovery.test.ts
+@@ -109,6 +109,16 @@ describe("scanTmuxPanesOrThrow", () => {
+       windowId: "@12",
+     });
+   });
++
++  it("counts a pane shared by grouped sessions once, under the first session listed", async () => {
++    const line = (session: string) => ["%7", "4242", session, "1", "0", "/dev/ttys001", "1700000000",
++      "1700000100", "pi", "node", "/repo", "@12"].join(PANE_FIELD_SEP);
++    withTmuxResult({ exitCode: 0, stdout: `${line("work")}\n${line("work-2")}\n` });
++
++    const scan = await scanTmuxPanesOrThrow();
++    expect(scan.panes).toHaveLength(1);
++    expect(scan.panes[0]).toMatchObject({ paneId: "%7", sessionName: "work", target: "work:1.0" });
++  });
+ });
+ 
+ describe("findPaneHostingPid", () => {
+diff --git a/src/daemon/pane-discovery.ts b/src/daemon/pane-discovery.ts
+index 75a866f..4b3b14e 100644
+--- a/src/daemon/pane-discovery.ts
++++ b/src/daemon/pane-discovery.ts
+@@ -125,6 +125,9 @@ export async function scanTmuxPanesOrThrow(): Promise<PaneScan> {
+   }
+ 
+   const panes: TmuxPane[] = [];
++  // Grouped sessions (one view per terminal) list each shared pane once per session; the first,
++  // the session listed first, stands for it, so no agent is counted twice.
++  const seen = new Set<string>();
+ 
+   for (const line of output.trim().split("\n")) {
+     const [
+@@ -154,7 +157,8 @@ export async function scanTmuxPanesOrThrow(): Promise<PaneScan> {
+     // cross-server target by comparing the socket from `GET /server-info`
+     // (src/lib/tmux-server.ts). Server-qualified ids are a non-goal until
+     // multi-server support.
+-    if (!isNaN(panePid) && paneId) {
++    if (!isNaN(panePid) && paneId && !seen.has(paneId)) {
++      seen.add(paneId);
+       panes.push({
+         paneId,
+         windowId: windowId || undefined,
+diff --git a/src/daemon/server.ts b/src/daemon/server.ts
+index 05cfd72..d5300ac 100644
+--- a/src/daemon/server.ts
++++ b/src/daemon/server.ts
+@@ -15,7 +15,7 @@ import {
+   resolveWorktreePath,
+   validateWorktreeConfig,
+ } from "../lib/worktree-layout";
+-import { listTmuxClientTtys } from "../lib/tmux-client";
++import { listTmuxClientTtys, targetInSession } from "../lib/tmux-client";
+ import { tmuxArgv } from "../lib/tmux-exec";
+ import { attemptedTmuxSocketPath } from "../lib/tmux-socket";
+ import {
+@@ -5272,6 +5272,9 @@ export class DaemonServer {
+         listTmuxClientTtys,
+       );
+       if (focusArgv) {
++        // The caller's own session: with grouped views a bare pane id could
++        // select the window in, or switch to, another terminal's view.
++        focusArgv[focusArgv.length - 1] = await targetInSession(callerSessionId, paneId);
+         try {
+           const focusProc = Bun.spawn(tmuxArgv(...focusArgv), {
+             stdout: "pipe",
+diff --git a/src/lib/tmux-client.grouped.test.ts b/src/lib/tmux-client.grouped.test.ts
+new file mode 100644
+index 0000000..0435655
+--- /dev/null
++++ b/src/lib/tmux-client.grouped.test.ts
+@@ -0,0 +1,78 @@
++// Grouped sessions (one view per terminal) against a real tmux: a jump pinned with targetForClient
++// moves only the jumping terminal, even when the other terminal was active last.
++// Its own two servers by socket path; refuses to run with $TMUX set, so it can never reach the
++// developer's server. The "terminals" are panes of the outer server attached to the inner one.
++import { afterAll, beforeAll, describe, expect, it } from "bun:test";
++import { mkdtempSync, rmSync } from "fs";
++import { tmpdir } from "os";
++import { join } from "path";
++import { resetTmuxSocketCache } from "./tmux-socket";
++import { targetForClient } from "./tmux-client";
++
++const tmuxBin = Bun.which("tmux");
++const skip = !tmuxBin || Boolean(process.env.TMUX);
++const dir = mkdtempSync(join(tmpdir(), "ccmux-grouped-"));
++const inner = join(dir, "inner.sock");
++const outer = join(dir, "outer.sock");
++const run = (socket: string, ...args: string[]): string => {
++  const env = { ...process.env };
++  delete env.TMUX;
++  delete env.TMUX_PANE;
++  const proc = Bun.spawnSync([tmuxBin!, "-S", socket, ...args], { env, stdout: "pipe", stderr: "pipe" });
++  if (proc.exitCode !== 0) throw new Error(`tmux ${args.join(" ")}: ${proc.stderr.toString()}`);
++  return proc.stdout.toString().trim();
++};
++const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
++
++describe.skipIf(skip)("targetForClient with grouped views (real tmux)", () => {
++  const previousSocket = process.env.CCMUX_TMUX_SOCKET;
++  let paneA = "", paneB = "", ttyA = "";
++  const windowOf = (session: string) => run(inner, "display-message", "-p", "-t", session, "#{window_id}");
++  const sessionOfClient = (tty: string) =>
++    run(inner, "list-clients", "-F", "#{client_tty} #{session_name}").split("\n")
++      .map((line) => line.split(" ")).find(([t]) => t === tty)?.[1];
++
++  beforeAll(async () => {
++    process.env.CCMUX_TMUX_SOCKET = inner;
++    resetTmuxSocketCache();
++    run(inner, "-f", "/dev/null", "new-session", "-d", "-s", "ws", "sleep 100000");
++    paneA = run(inner, "display-message", "-p", "-t", "ws", "#{pane_id}");
++    paneB = run(inner, "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "ws:", "sleep 100000");
++    run(inner, "new-session", "-d", "-t", "ws", "-s", "va");
++    run(inner, "new-session", "-d", "-t", "ws", "-s", "vb");
++    run(inner, "select-window", "-t", `vb:${run(inner, "display-message", "-p", "-t", paneB, "#{window_id}")}`);
++    const attach = (session: string) => `env -u TMUX ${tmuxBin} -S ${inner} attach -t ${session}`;
++    run(outer, "-f", "/dev/null", "new-session", "-d", "-s", "a", "-x", "80", "-y", "24", attach("va"));
++    run(outer, "new-session", "-d", "-s", "b", "-x", "80", "-y", "24", attach("vb"));
++    ttyA = run(outer, "display-message", "-p", "-t", "a", "#{pane_tty}");
++    for (let i = 0; i < 50 && run(inner, "list-clients", "-F", "x").split("\n").length < 2; i++) await sleep(100);
++  });
++
++  afterAll(() => {
++    for (const socket of [outer, inner]) try { run(socket, "kill-server"); } catch {}
++    rmSync(dir, { recursive: true, force: true });
++    if (previousSocket === undefined) delete process.env.CCMUX_TMUX_SOCKET;
++    else process.env.CCMUX_TMUX_SOCKET = previousSocket;
++    resetTmuxSocketCache();
++  });
++
++  it("keeps the jump in the jumping terminal's view when the other was active last", async () => {
++    const before = windowOf("vb");
++    run(outer, "send-keys", "-t", "b", "x");  // terminal B active last
++    await sleep(300);
++    run(inner, "select-window", "-t", `va:${run(inner, "display-message", "-p", "-t", paneB, "#{window_id}")}`);
++
++    const target = await targetForClient(ttyA, paneA);
++    expect(target).toMatch(/^\$\d+:@\d+\.%\d+$/);
++    run(inner, "switch-client", "-c", ttyA, "-t", target);
++
++    expect(sessionOfClient(ttyA)).toBe("va");
++    expect(windowOf("va")).toBe(run(inner, "display-message", "-p", "-t", paneA, "#{window_id}"));
++    expect(windowOf("vb")).toBe(before);
++  });
++
++  it("leaves a target its client's session lacks unchanged", async () => {
++    expect(await targetForClient("/dev/no-such-client", paneA)).toBe(paneA);
++    expect(await targetForClient(ttyA, "%99999")).toBe("%99999");
++  });
++});
+diff --git a/src/lib/tmux-client.ts b/src/lib/tmux-client.ts
+index 59e7654..6a92ddf 100644
+--- a/src/lib/tmux-client.ts
++++ b/src/lib/tmux-client.ts
+@@ -316,3 +316,55 @@ export async function resolvePinnedTmuxClientTty(): Promise<ResolvedClientTty> {
+   if (current && CLIENT_TTY_PATTERN.test(current)) return { tty: current };
+   return { tty: null, refusal: "no-client" };
+ }
++
++/**
++ * A `%N` pane or `@N` window target pinned to one session: `$S:@W` or
++ * `$S:@W.%P`, when that session has the window. Otherwise the target as given.
++ *
++ * Grouped sessions (one view per terminal, sharing every window) make a bare
++ * pane or window target ambiguous: tmux resolves it in the most recently
++ * active session that has the window, which can be ANOTHER terminal's view, so
++ * `switch-client -c A -t %5` moved terminal B to %5's window and A into B's
++ * view. Naming A's own session keeps the jump on A. tmux rejects `$S:%P`, so
++ * the window id is looked up. One tmux invocation answers both questions; any
++ * failure falls back to the bare target, the ungrouped behavior unchanged.
++ */
++export async function targetForClient(
++  clientTty: string,
++  target: string,
++): Promise<string> {
++  return pinTarget(target, { clientTty });
++}
++
++/** {@link targetForClient} for a session already known. */
++export async function targetInSession(
++  sessionId: string | null | undefined,
++  target: string,
++): Promise<string> {
++  return sessionId ? pinTarget(target, { sessionId }) : target;
++}
++
++async function pinTarget(
++  target: string,
++  owner: { clientTty?: string; sessionId?: string },
++): Promise<string> {
++  if (!/^[%@]\d+$/.test(target)) return target;
++  const panes = ["list-panes", "-a", "-F", ["P", "#{session_id}", "#{window_id}", "#{pane_id}"].join(PANE_FIELD_SEP)];
++  const args = owner.clientTty
++    ? ["list-clients", "-F", ["C", "#{client_tty}", "#{session_id}"].join(PANE_FIELD_SEP), ";", ...panes]
++    : panes;
++  let out: string;
++  try {
++    const proc = Bun.spawn(tmuxArgv(...args), { stdout: "pipe", stderr: "ignore" });
++    out = await new Response(proc.stdout).text();
++    if ((await proc.exited) !== 0) return target;
++  } catch {
++    return target;
++  }
++  const rows = out.split("\n").map((line) => line.split(PANE_FIELD_SEP));
++  const session = owner.sessionId ?? rows.find(([kind, tty]) => kind === "C" && tty === owner.clientTty)?.[2];
++  if (!session) return target;
++  const row = rows.find(([kind, s, w, p]) => kind === "P" && s === session && (p === target || w === target));
++  if (!row) return target;
++  return target.startsWith("%") ? `${session}:${row[2]}.${target}` : `${session}:${row[2]}`;
++}
+diff --git a/src/tui/utils/client-switch.test.ts b/src/tui/utils/client-switch.test.ts
+index b44cb62..69aebd5 100644
+--- a/src/tui/utils/client-switch.test.ts
++++ b/src/tui/utils/client-switch.test.ts
+@@ -1,5 +1,6 @@
+ import { afterEach, describe, expect, it } from "bun:test";
+ import { setPinnedTmuxClientTty } from "../../lib/tmux-client";
++import { PANE_FIELD_SEP } from "../../lib/tmux-format";
+ 
+ // App.test.tsx process-wide mocks tmux.ts, which re-exports this function.
+ // Use a distinct cache entry so this file always exercises the implementation.
+@@ -99,13 +100,19 @@ const PROBE_CALLS = [
+   ["tmux", "list-clients", "-t", "$0", "-F", "#{client_tty}"],
+ ];
+ 
++/** The lookup that pins a switch to the client's own session (grouped views). */
++const pinCall = () => [
++  "tmux", "list-clients", "-F", ["C", "#{client_tty}", "#{session_id}"].join(PANE_FIELD_SEP), ";",
++  "list-panes", "-a", "-F", ["P", "#{session_id}", "#{window_id}", "#{pane_id}"].join(PANE_FIELD_SEP),
++];
++
+ afterEach(() => {
+   setPinnedTmuxClientTty(undefined);
+ });
+ 
+ describe("switchToPane", () => {
+   it("pins the switch to the client tty captured by the picker binding", async () => {
+-    const spawn = withSpawn([{}]);
++    const spawn = withSpawn([{}, {}]);
+     try {
+       const result = await withClientTty("/dev/ttys005", () =>
+         switchToPane("%42"),
+@@ -113,6 +120,7 @@ describe("switchToPane", () => {
+ 
+       expect(result).toBe(true);
+       expect(spawn.calls).toEqual([
++        pinCall(),
+         ["tmux", "switch-client", "-c", "/dev/ttys005", "-t", "%42"],
+       ]);
+     } finally {
+@@ -120,6 +128,25 @@ describe("switchToPane", () => {
+     }
+   });
+ 
++  it("keeps the switch in the client's own view when grouped sessions share the window", async () => {
++    // Two views ($1 for this client, $2 for another) of one window @4: a bare
++    // %42 would resolve in whichever view was active last.
++    const row = (...f: string[]) => f.join(PANE_FIELD_SEP);
++    const spawn = withSpawn([
++      { stdout: [row("C", "/dev/ttys005", "$1"), row("C", "/dev/ttys006", "$2"),
++        row("P", "$2", "@4", "%42"), row("P", "$1", "@4", "%42")].join("\n") + "\n" },
++      {},
++    ]);
++    try {
++      const result = await withClientTty("/dev/ttys005", () => switchToPane("%42"));
++
++      expect(result).toBe(true);
++      expect(spawn.calls[1]).toEqual(["tmux", "switch-client", "-c", "/dev/ttys005", "-t", "$1:@4.%42"]);
++    } finally {
++      spawn.restore();
++    }
++  });
++
+   it("falls back to the current tmux client in a real pane", async () => {
+     // Our own tty IS a pane, so the guess cannot be some other client.
+     const spawn = withSpawn([
+@@ -128,6 +155,7 @@ describe("switchToPane", () => {
+       { stdout: `${PANE_TTY}\n` },
+       { stdout: "/dev/ttys010\n/dev/ttys011\n" },
+       {},
++      {},
+     ]);
+     try {
+       const result = await withTmux(INSIDE_TMUX, () =>
+@@ -137,6 +165,7 @@ describe("switchToPane", () => {
+       expect(result).toBe(true);
+       expect(spawn.calls).toEqual([
+         ...PROBE_CALLS,
++        pinCall(),
+         ["tmux", "switch-client", "-c", PANE_TTY, "-t", "%8"],
+       ]);
+     } finally {
+@@ -154,6 +183,7 @@ describe("switchToPane", () => {
+       { stdout: "/dev/ttys099\n" },
+       { stdout: "/dev/ttys010\n" },
+       {},
++      {},
+     ]);
+     try {
+       const result = await withTmux(INSIDE_TMUX, () =>
+@@ -163,6 +193,7 @@ describe("switchToPane", () => {
+       expect(result).toBe(true);
+       expect(spawn.calls).toEqual([
+         ...PROBE_CALLS,
++        pinCall(),
+         ["tmux", "switch-client", "-c", "/dev/ttys010", "-t", "%8"],
+       ]);
+     } finally {
+@@ -217,7 +248,7 @@ describe("switchToPane", () => {
+   it("takes the guess outside tmux without probing for a popup", async () => {
+     // A plain terminal has no pane of its own either, so probing would flag it
+     // as a popup and cost it every switch it ever makes.
+-    const spawn = withSpawn([{ stdout: "/dev/pts/7\n" }, {}]);
++    const spawn = withSpawn([{ stdout: "/dev/pts/7\n" }, {}, {}]);
+     try {
+       const result = await withTmux(undefined, () =>
+         withClientTty(undefined, () => switchToPane("%8")),
+@@ -226,6 +257,7 @@ describe("switchToPane", () => {
+       expect(result).toBe(true);
+       expect(spawn.calls).toEqual([
+         ["tmux", "display-message", "-p", "#{client_tty}"],
++        pinCall(),
+         ["tmux", "switch-client", "-c", "/dev/pts/7", "-t", "%8"],
+       ]);
+     } finally {
+@@ -274,7 +306,7 @@ describe("switchToPane", () => {
+   });
+ 
+   it("reports a directed switch failure", async () => {
+-    const spawn = withSpawn([{ exitCode: 1 }]);
++    const spawn = withSpawn([{}, { exitCode: 1 }]);
+     try {
+       const result = await withClientTty("/dev/ttys005", () =>
+         switchToPane("%42"),
+@@ -286,7 +318,7 @@ describe("switchToPane", () => {
+     }
+   });
+   it("prefers the --client-tty flag over the environment and the fallback", async () => {
+-    const spawn = withSpawn([{}]);
++    const spawn = withSpawn([{}, {}]);
+     try {
+       const result = await withClientTtyFlag("/dev/ttys011", () =>
+         withClientTty("/dev/ttys005", () => switchToPane("%42")),
+@@ -294,6 +326,7 @@ describe("switchToPane", () => {
+ 
+       expect(result).toBe(true);
+       expect(spawn.calls).toEqual([
++        pinCall(),
+         ["tmux", "switch-client", "-c", "/dev/ttys011", "-t", "%42"],
+       ]);
+     } finally {
+diff --git a/src/tui/utils/client-switch.ts b/src/tui/utils/client-switch.ts
+index a66d997..69e7516 100644
+--- a/src/tui/utils/client-switch.ts
++++ b/src/tui/utils/client-switch.ts
+@@ -1,5 +1,6 @@
+ import {
+   resolvePinnedTmuxClientTty,
++  targetForClient,
+   type ClientTtyRefusal,
+ } from "../../lib/tmux-client";
+ import { tmuxArgv } from "../../lib/tmux-exec";
+@@ -21,7 +22,7 @@ export async function switchToPane(
+ 
+   try {
+     const proc = Bun.spawn(
+-      tmuxArgv("switch-client", "-c", resolved.tty, "-t", target),
++      tmuxArgv("switch-client", "-c", resolved.tty, "-t", await targetForClient(resolved.tty, target)),
+       {
+         stdout: "pipe",
+         stderr: "pipe",
+diff --git a/src/tui/utils/tmux.test.ts b/src/tui/utils/tmux.test.ts
+index 90cc23b..f8e1478 100644
+--- a/src/tui/utils/tmux.test.ts
++++ b/src/tui/utils/tmux.test.ts
+@@ -321,13 +321,16 @@ describe("openDedupedCommandWindow client pinning", () => {
+     const stubs = withTmuxStubs([
+       { stdout: windowRow("@2", AGENTS_WINDOW_NAME) },
+       {},
++      {},
+     ]);
+     try {
+       setPinnedTmuxClientTty("/dev/ttys005");
+       const result = await openAgentsWindow("/tmp/proj");
+ 
+       expect(result).toEqual({ ok: true, clientSwitched: true });
+-      expect(stubs.calls[1]).toEqual([
++      // calls[1] pins the target to the client's own view (grouped sessions).
++      expect(stubs.calls[1]?.[1]).toBe("list-clients");
++      expect(stubs.calls[2]).toEqual([
+         "tmux",
+         "switch-client",
+         "-c",
+@@ -354,7 +357,8 @@ describe("openDedupedCommandWindow client pinning", () => {
+       expect(result).toEqual({ ok: true, clientSwitched: true });
+       expect(stubs.calls[1]?.[1]).toBe("list-clients");
+       expect(stubs.calls[2]?.[1]).toBe("new-window");
+-      expect(stubs.calls[3]).toEqual([
++      expect(stubs.calls[3]?.[1]).toBe("list-panes");
++      expect(stubs.calls[4]).toEqual([
+         "tmux",
+         "switch-client",
+         "-c",
+@@ -490,6 +494,7 @@ describe("openDedupedCommandWindow client pinning", () => {
+       { stdout: "" },
+       { stdout: clientList("/dev/ttys005", "$3") },
+       { stdout: "%9\n" },
++      {},
+       { exitCode: 1 },
+     ]);
+     try {
+@@ -505,6 +510,7 @@ describe("openDedupedCommandWindow client pinning", () => {
+         "list-windows",
+         "list-clients",
+         "new-window",
++        "list-panes",
+         "switch-client",
+       ]);
+     } finally {
+@@ -663,6 +669,7 @@ describe("openDedupedCommandWindow client pinning", () => {
+     // name dedupe on every activation.
+     const stubs = withTmuxStubs([
+       { stdout: windowRow("@2", AGENTS_WINDOW_NAME) },
++      {},
+       { exitCode: 1 },
+       { stdout: windowRow("@2", AGENTS_WINDOW_NAME) },
+     ]);
+@@ -677,6 +684,7 @@ describe("openDedupedCommandWindow client pinning", () => {
+       });
+       expect(stubs.calls.map((argv) => argv[1])).toEqual([
+         "list-windows",
++        "list-clients",
+         "switch-client",
+         "list-windows",
+       ]);
+@@ -688,6 +696,7 @@ describe("openDedupedCommandWindow client pinning", () => {
+   it("still spawns when the existing window really did vanish", async () => {
+     const stubs = withTmuxStubs([
+       { stdout: windowRow("@2", AGENTS_WINDOW_NAME) },
++      {},
+       { exitCode: 1 },
+       { stdout: "" },
+       { stdout: clientList("/dev/ttys005", "$3") },
+@@ -701,10 +710,12 @@ describe("openDedupedCommandWindow client pinning", () => {
+       expect(result).toEqual({ ok: true, clientSwitched: true });
+       expect(stubs.calls.map((argv) => argv[1])).toEqual([
+         "list-windows",
++        "list-clients",
+         "switch-client",
+         "list-windows",
+         "list-clients",
+         "new-window",
++        "list-panes",
+         "switch-client",
+       ]);
+     } finally {
+@@ -784,6 +795,7 @@ describe("openDedupedCommandWindow client pinning", () => {
+         "list-windows",
+         "list-clients",
+         "new-window",
++        "list-panes",
+         "switch-client",
+       ]);
+       // The flag's session, not a refusal and not the env's bogus value.
+diff --git a/src/tui/utils/tmux.ts b/src/tui/utils/tmux.ts
+index 04845b5..3b5fca6 100644
+--- a/src/tui/utils/tmux.ts
++++ b/src/tui/utils/tmux.ts
+@@ -8,6 +8,8 @@ import { tmuxArgv, tmuxShellPrefix } from "../../lib/tmux-exec";
+ import {
+   resolvePinnedTmuxClientTty,
+   resolveTmuxClientSessionId,
++  targetForClient,
++  targetInSession,
+   type ClientTtyRefusal,
+ } from "../../lib/tmux-client";
+ import { theme } from "../theme";
+@@ -404,7 +406,7 @@ async function openDedupedCommandWindow(
+       if (!clientTty)
+         return { ok: true, clientSwitched: false, reason: "no-client-tty" };
+       const switchProc = Bun.spawn(
+-        tmuxArgv("switch-client", "-c", clientTty, "-t", existing),
++        tmuxArgv("switch-client", "-c", clientTty, "-t", await targetForClient(clientTty, existing)),
+         { stdout: "ignore", stderr: "ignore" },
+       );
+       if ((await switchProc.exited) === 0) {
+@@ -426,6 +428,7 @@ async function openDedupedCommandWindow(
+     // the pinned switch too. The user would get a "switch failed" toast plus a
+     // window in somebody else's session. Better to create nothing and say so.
+     let placement: string[] = [];
++    let placedSession: string | null = null;
+     if (clientTty) {
+       const sessionId = await resolveTmuxClientSessionId(clientTty);
+       if (!sessionId) {
+@@ -435,6 +438,7 @@ async function openDedupedCommandWindow(
+         };
+       }
+       placement = ["-t", sessionId];
++      placedSession = sessionId;
+     }
+     const spawn = Bun.spawn(
+       tmuxArgv(
+@@ -466,7 +470,7 @@ async function openDedupedCommandWindow(
+     if (!clientTty)
+       return { ok: true, clientSwitched: false, reason: "no-client-tty" };
+     const switchFresh = Bun.spawn(
+-      tmuxArgv("switch-client", "-c", clientTty, "-t", paneId),
++      tmuxArgv("switch-client", "-c", clientTty, "-t", await targetInSession(placedSession, paneId)),
+       { stdout: "ignore", stderr: "ignore" },
+     );
+     // The window exists either way, so this is never an error. A stale
