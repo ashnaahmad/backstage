@@ -30,6 +30,8 @@ In `~/.pi/agent/settings.json`, preserve unrelated settings and add the absolute
 
 If migrating an existing agent setup, reconcile its quality hooks and skills with this bundle so the same guidance does not load twice. Back up settings before removing registrations.
 
+Claude Code supports repository `AGENTS.md` directly from v2.1.277. No root `CLAUDE.md` pointer is needed here. Native Claude Code defaults to `CLAUDE.md` instead if one (or `CLAUDE.local.md`) exists in the working directory or an ancestor; check its Project instructions setting in that case. In Pi, the bridge uses Pi-supplied context and excludes native project instruction loading to avoid duplicates. See [Claude Code memory documentation](https://code.claude.com/docs/en/memory#agentsmd).
+
 ## Private credential entry
 
 [pi-secrets](https://github.com/liamvinberg/pi-secrets) provides
@@ -185,7 +187,7 @@ pi -ne -ns -np \
 - [Project settings](.pi/settings.json) pin packages and select models. [Bridge settings](.pi/claude-bridge.json) carry the provider configuration without credentials.
 - [Code-quality skill](skills/code-quality/SKILL.md) and [quality extension](pi/extensions/code-quality.ts) are referenced by the global configuration. The [review transport](scripts/lib/quality-review.ts) uses the global bridge installation, including from other repositories.
 - **Point-in-time document feedback:** [Pi event hook](pi/extensions/quality-feedback.ts), [detector](scripts/lib/quality-feedback.ts), [scope configuration](.pi/quality-checks.json) and [tests](scripts/tests/quality-feedback.test.mjs). These are tracked despite `.pi` being hidden in many file browsers. The hook adds advisory tool-result feedback; it does not rewrite or block edits. It flags newly introduced chronology markers in configured standing documents, not all possible stale prose. Current scope: PLAN.md, README.md, AGENTS.md and guidance/. Other repositories default to AGENTS.md, README.md and PLAN.md; their own `standingDocuments` list replaces that scope, and `[]` disables it.
-- [Global instructions](guidance/global-agents.md) and writing guidance live under guidance/; the [skills](#skills) route to them. Install the global instructions deliberately in the new client's supported location, reconciling existing instructions. Recreate shared skill symlinks against the new checkout; do not copy this Mac's absolute links.
+- [AGENTS.md](AGENTS.md) governs work on this repository. [Global instructions](guidance/global-agents.md) are a portable template for cross-project guidance, not an automatically discovered filename. Reconcile them with `~/AGENTS.md`; the [Pi entrypoint](guidance/pi-global-context.md) tells Pi to read that file from any working directory. The writing skill separately selects its model-specific guide. Recreate shared skill symlinks against the new checkout; do not copy this Mac's absolute links.
 
 The hook runs inside Pi for either model. It does nothing in repositories whose configuration sets `standingDocuments` to `[]`. It does not automatically run in an outer Codex or Claude session. The old Claude quality hook has been removed; Pi is the unified quality surface.
 
