@@ -50,6 +50,8 @@ after installation rather than assume identical resolution.
 
 ## Optional features — install only when used
 
+- **Claude companion / three-way conversations:** Claude Code, zsh and Python 3 on PATH. The wrapper is bundled under `skills/claude-companion/scripts/`; credentials and Claude session history are configured separately.
+
 - **Mobile terminal:** `brew install ttyd` (tested 1.7.7,
   Homebrew revision 14) plus Tailscale on the Mac and phone;
   macOS for the LaunchAgent. See [SETUP.md](SETUP.md#mobile-terminal).
