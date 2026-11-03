@@ -39,7 +39,7 @@ The editor uses Vim navigation outside insert mode. Its header shows controls. U
 ## Repository map
 
 - [Pi extensions](pi/extensions/) and [prompt templates](pi/prompts/)
-- [Skills](skills/): code quality, writing and skill creation
+- [Skills](skills/): code quality, writing, skill creation and [three-way conversation](skills/three-way-conversation/SKILL.md) (requires a separately installed Claude companion wrapper)
 - [Scripts and tests](scripts/), [Neovim configuration](nvim/) and [tmux configuration](tmux/)
 - [Mobile controls](mobile/) and [Hunk extensions](extensions/hunk/)
 - [Pinned upstream patches](patches/) and [cloud experiment](pi-cloud-agents/)

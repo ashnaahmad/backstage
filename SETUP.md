@@ -149,6 +149,7 @@ and the service starting at login after a real restart
 Pi loads every skill in this checkout's `skills/` through that global `skills` entry, from any directory; `skills/` is not discovered as project skills, so a worktree adds no second copy:
 
 - [code-quality](skills/code-quality/SKILL.md): implementation, testing and review.
+- [three-way-conversation](skills/three-way-conversation/SKILL.md): informal conversations between the user and two assistants. Requires a separately installed `claude-companion.sh`, Claude Code, zsh, Python 3 and private API credentials; see its [transport reference](skills/three-way-conversation/references/transport.md).
 - [skill-creator](skills/skill-creator/SKILL.md): creating or revising skills for any workflow.
 - [writing](skills/writing/SKILL.md): drafting and revising prose; it selects the [Claude](guidance/claude-writing.md) or [Astra](guidance/astra-writing.md) detailed guide by model family, only for relevant writing tasks.
 
