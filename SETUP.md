@@ -398,6 +398,17 @@ patch -p1 -d "$pkg" < \
 The current command is `requests`; this changes only the
 skill examples, not the browser runtime.
 
+A second tracked patch adds the skill's route for sites behind
+two-factor sign-in, which can fail in the bundled browser:
+attach to the user's signed-in Chrome through Playwright's
+Chrome extension (`attach --extension=chrome`). Apply it after
+the first:
+
+```sh
+patch -p1 -d "$pkg" < \
+  patches/pi-playwright-0.1.2-chrome-bridge.patch
+```
+
 The ccmux setup regenerates its Pi tracking extension at
 `~/.pi/agent/extensions/ccmux.js` with the new machine's
 home path. It reports session identity/activity; it does

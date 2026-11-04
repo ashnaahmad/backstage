@@ -41,8 +41,10 @@ after installation rather than assume identical resolution.
   0.1.22 and Playwright `1.64.0-alpha-1790635538000`, using
   Chromium revision 1247. Use that installed CLI’s
   `install-browser chrome-for-testing`, not an arbitrary browser
-  download. Apply the [0.1.2 skill patch](patches/pi-playwright-0.1.2-requests.patch)
-  as described in SETUP.md.
+  download. Apply the 0.1.2 skill patches
+  ([`requests`](patches/pi-playwright-0.1.2-requests.patch), then
+  [Chrome bridge](patches/pi-playwright-0.1.2-chrome-bridge.patch)) as
+  described in SETUP.md.
 - **Markdown image previews:** a renderer-supported Chromium
   browser and an image-capable terminal. Browser previews do not
   require terminal image support. Check image display through the

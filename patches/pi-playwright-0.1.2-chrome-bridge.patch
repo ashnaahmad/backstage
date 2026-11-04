@@ -1,0 +1,28 @@
+--- a/skills/playwright-browser/SKILL.md
++++ b/skills/playwright-browser/SKILL.md
+@@ -110,6 +110,25 @@
+ node "$SKILL_DIR/scripts/pw.js" state-load "$ARTIFACT_DIR/auth.json"
+ ```
+ 
++### Sites behind two-factor sign-in: attach to the user's Chrome
++
++Two-factor sign-in can fail in the bundled browser. Ask the user to install
++Playwright's Chrome extension (it shows as "Playwright Extension") in their
++everyday Chrome and sign in there, then attach to it:
++
++```bash
++node "$SKILL_DIR/scripts/pw.js" attach --extension=chrome
++```
++
++The command waits until the user approves the connection in Chrome and picks a
++tab, so run it in the background or with a long timeout. Pass the session name
++it prints to later commands (`-s=<session>`). You are now acting in the user's
++real tab with their account: navigation and clicks happen in front of them, so
++change nothing they have not asked for. Run commands from the artifact
++directory, because the CLI writes page snapshots to `.playwright-cli/` in the
++current directory and they can hold the signed-in account's data. Finish with
++`detach`.
++
+ ### Close when done
+ 
+ ```bash
