@@ -4,8 +4,4 @@ Read `$HOME/AGENTS.md` before acting unless its contents are already supplied in
 
 ## Tools
 
-A tool declared in your tool list is callable as it is: call it directly. Under the Claude bridge, MCP servers' tools appear as `mcp__custom-tools__mcp__<server>__<tool>` (for example `mcp__custom-tools__mcp__linear__get_issue`).
-
-- Check the tool list itself before anything else. A session's MCP server summary can list a server as needing `tool_search` while its tools are already declared; the tool list wins.
-- Use `tool_search` only for a server with no declared tools. It reports names without the bridge prefix (`mcp__linear__get_issue`); call the prefixed name from the tool list.
-- Do not call a tool unavailable unless a call with its declared name failed in this session, and quote that error. Do not ask for an API key or fall back to another route while the declared tool is available.
+A tool declared in your tool list is callable as it is: call it directly. Under the Claude bridge, MCP servers' tools appear as `mcp__custom-tools__mcp__<server>__<tool>` (for example `mcp__custom-tools__mcp__linear__get_issue`). Use `tool_search` only for a server with no declared tools. It reports names without the bridge prefix (`mcp__linear__get_issue`); call the prefixed name from the tool list. Do not ask for an API key or fall back to another route while the declared tool is available.
