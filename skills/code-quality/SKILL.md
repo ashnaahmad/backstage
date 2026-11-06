@@ -9,6 +9,8 @@ Hold the requested outcome stable; let evidence change the plan. The working con
 
 ## Implement
 
+Before choosing an implementation, compare the proposed work with the original request and subsequent corrections in both directions: what part of the agreed outcome would remain undelivered, and what work goes beyond what that outcome needs? A plan can be too broad and still incomplete. Challenge your interpretation rather than treating the plan or a previous agent's handoff as the requirement; preserve justified work and revise omissions and unnecessary additions together. This is a scope check, not a reason to minimise the requested outcome.
+
 Inspect the code, affected callers and project rationale before choosing a consequential mechanism. Use the project's designated design or research sources when the purpose is unclear. Explain significant choices against that purpose while they are still inexpensive to change; a short explanation is enough, not a mandatory contract file.
 
 After initial inspection and before starting to code or making implementation edits, tell the user your provisional size assessment and why: expected scope, main uncertainty, focused verification, and whether self-review or independent review is warranted. Keep this brief for small changes; it is a declaration, not an approval gate. Record it in quality status when available, but do not substitute an internal status entry for the user-facing statement. Reassess and tell the user when evidence materially changes the scope or risk.
