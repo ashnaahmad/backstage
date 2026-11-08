@@ -154,6 +154,7 @@ Pi loads every skill in this checkout's `skills/` through that global `skills` e
 - [claude-companion](skills/claude-companion/SKILL.md): a bundled Claude Code wrapper for new and resumed sessions; requires Claude Code, zsh and Python 3.
 - [three-way-conversation](skills/three-way-conversation/SKILL.md): informal conversations between the user and two assistants. Uses the bundled `claude-companion.sh`; requires Claude Code, zsh, Python 3 and private API credentials; see its [transport reference](skills/three-way-conversation/references/transport.md).
 - [skill-creator](skills/skill-creator/SKILL.md): creating or revising skills for any workflow.
+- [research-collaboration](skills/research-collaboration/SKILL.md): iterative source-led research and argument testing with an author, keeping research separate from publication prose.
 - [writing](skills/writing/SKILL.md): drafting and revising prose; it selects the [Claude](guidance/claude-writing.md) or [Astra](guidance/astra-writing.md) detailed guide by model family, only for relevant writing tasks.
 
 Other clients can load these same skill directories using their own configuration. Check a new or changed skill with `/reload`, the startup resource list (Ctrl+O) and `/skill:name`.
