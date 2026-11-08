@@ -756,9 +756,17 @@ Font is needed. Optional HTML, LaTeX and YAML frontmatter
 rendering is not installed. A read-only index of common keys
 sits above the document (outside typing, every key is a
 command): `i` to type, `Esc` to stop, `w` to save and `q` to
-close (asks about unsaved edits), undo, delete, paste and
-find. Clicking it returns to the document. The line beneath
-it names the document and shows the warnings below.
+close (asks about unsaved edits), undo, delete, copy, paste
+and find. Clicking it returns to the document. The line
+beneath it names the document and shows the warnings below.
+
+The mouse belongs to Neovim, so the terminal's Cmd-C and
+right-click Copy find no selection. Outside typing, a mouse
+selection (drag, double or triple click) is copied to the
+system clipboard on release, and `y` copies too; deletions
+stay in Neovim's own register. While typing, a selection is
+not copied, so pasting over it inserts what was copied
+elsewhere.
 
 The editor starts in the home directory, not the document's
 folder, so removing a worktree cannot leave it without a

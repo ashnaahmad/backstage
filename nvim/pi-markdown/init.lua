@@ -30,6 +30,31 @@ vim.keymap.set('x', '<BS>', 'd', { desc = 'Delete the selection' })
 vim.api.nvim_create_autocmd('ModeChanged', { pattern = '*:i', callback = function() vim.o.selectmode = 'mouse' end })
 vim.api.nvim_create_autocmd('ModeChanged', { pattern = '*:n', callback = function() vim.o.selectmode = '' end })
 
+-- Copying to the system clipboard. The terminal's Cmd-C and right-click Copy see no selection, since
+-- the mouse belongs to Neovim. Outside typing, a mouse selection is copied when the button is released
+-- and stays selected. While typing it is not, so selecting text and pasting replaces it with what was
+-- copied elsewhere. Yanks (`y`) are copied too; deletions stay in Neovim, for `p`.
+local function copy_selection()
+  local mode = vim.fn.mode()
+  if not mode:match('^[vV\22]$') then return end
+  local lines = vim.fn.getregion(vim.fn.getpos('v'), vim.fn.getpos('.'), { type = mode })
+  local regtype = mode == 'V' and 'l' or mode == 'v' and 'c' or 'b'
+  vim.fn.setreg('+', lines, regtype)
+  vim.fn.setreg('"', lines, regtype)  -- and for `p`
+end
+for _, release in ipairs({ '<LeftRelease>', '<2-LeftRelease>', '<3-LeftRelease>', '<4-LeftRelease>' }) do
+  vim.keymap.set('x', release, function()
+    vim.schedule(copy_selection)
+    return release
+  end, { expr = true, desc = 'Copy the mouse selection' })
+end
+vim.api.nvim_create_autocmd('TextYankPost', {
+  callback = function()
+    local event = vim.v.event
+    if event.operator == 'y' and event.regname == '' then vim.fn.setreg('+', event.regcontents, event.regtype) end
+  end,
+})
+
 local ok, render = pcall(require, 'render-markdown')
 if ok then
   -- Plain glyphs: the default heading, checkbox, link and callout icons need a Nerd Font.
@@ -80,7 +105,8 @@ local HELP = {
   ' w  save              q    close',
   ' u  undo              Ctrl-r  redo',
   ' x  delete a letter   dd   delete the line',
-  ' p  paste what was deleted',
+  ' p  paste what was deleted or copied',
+  ' y  copy a selection (a mouse selection copies itself)',
   ' /word Enter  find    n    next match',
   'Half-typed command or : line? Esc cancels it.',
 }
