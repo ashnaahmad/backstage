@@ -22,13 +22,19 @@ Some work calls for an incisive, personal argument. Other work may need neutral 
 
 **Letting symmetry distort the subject.** Two projects can illustrate related ideas while needing different treatment. A hypothesis to test and a permanent constraint to encode need different treatment. Preserve such distinctions even when a cleaner parallel sentence is tempting.
 
+**Compressing away the mechanism.** An abstract relationship can be both clear and elegant. Expand it when the reader cannot tell why it holds: whose interests diverge, what they can gain, and how the proposed change alters their choices. Do not turn one successful concrete rewrite into a rule against abstraction. Introduce a technical distinction through its consequences when the essay has no room to define its terms.
+
+**Making a connection explicit by naming it.** Repeatedly announcing that one example mirrors another can interrupt the reasoning. Make the shared mechanism recognisable through the choices, incentives and consequences in each case. Preserve enough detail for the reader to make the connection; removing the comparison’s name should not remove its explanatory content.
+
+**Letting a proposal become a procedure.** Keep the design choices that make the proposal work and explain why each is needed. Cut administrative assignments, evaluation inventories and routine safeguards when they merely demonstrate coverage. A practical essay needs a convincing account of how the intervention works, not every instruction for running it. During a style revision, preserve this substance while changing the progression and rhythm. Use studies to support the argument without automatically making a study the organising idea of a paragraph whose purpose is to explain a mechanism.
+
 ## A small drafting and revision loop
 
 1. Establish the actual question, reader, purpose and length. Ask for missing information that would change the answer. When the user delegates editorial judgement, choose a defensible construction rather than making them supply a hidden “correct thesis.”
 2. Use relevant writing samples to study selection, progression and how judgements are supported. An audience's writing can suggest register; the author's own samples can better establish voice. Borrow the method, not stock phrases.
 3. If repeated polishing fails, vary the construction. Offer a few genuinely different organising ideas, rather than paraphrases at different abstraction levels. A few alternatives can help an author select an argument and ending.
 4. Keep a brief working record of accepted choices. Separate factual corrections, structural choices and register preferences so a request on one axis does not reset the others. This need not become a visible form or permanent file.
-5. After revision, compare the complete draft with that record. Check that each added detail serves the argument and that the prose actually implements the requested change. A good explanation of the failure is not evidence that the next draft fixes it.
+5. After revision, compare the complete draft with that record. Check that each added detail serves the argument and that the prose actually implements the requested change. Reread the neighbouring paragraphs: a locally clearer sentence may break the transition or repeat an explanation. A good explanation of the failure is not evidence that the next draft fixes it.
 6. Cut repetition and secondary detail before removing the framing that makes the examples intelligible. Count the complete answer mechanically. Check whether the word limit actually requires losing the opening or ending before cutting them.
 
 ## Use and calibration
