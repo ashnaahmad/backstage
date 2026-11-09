@@ -754,7 +754,12 @@ pins render-markdown.nvim v8.14.0 under
 `~/.local/share/pi-markdown`; Neovim 0.12's bundled
 Markdown parsers suffice. Icons are plain Unicode; no Nerd
 Font is needed. Optional HTML, LaTeX and YAML frontmatter
-rendering is not installed. A read-only index of common keys
+rendering is not installed. Outside typing, the cursor's
+line stays rendered like the rest (the renderer's
+anti-conceal is off), except a table row too wide for the
+pane, which shows its Markdown while the cursor is on it:
+the renderer cannot place the cursor in its wrapped
+lines. Typing shows the Markdown. A read-only index of common keys
 sits above the document (outside typing, every key is a
 command): `i` to type, `Esc` to stop, `w` to save and `q` to
 close (asks about unsaved edits), undo, delete, copy, paste

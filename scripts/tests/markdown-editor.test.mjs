@@ -61,6 +61,31 @@ test('the command index sits above the document, is never focused, and q closes 
   }
 });
 
+test('outside typing, a table stays rendered on the cursor line; typing shows its Markdown', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'markdown-editor-'));
+  writeFileSync(join(dir, 'doc.md'), '# Doc\n\n| Name | Value |\n|---|---|\n| one | 1 |\n');
+  const e = editor(dir, dir, [join(dir, 'doc.md')]);
+  const table = () => e.screen().split('\n').filter(line => /Name|---|one|[┌├└]/.test(line)).join('\n');
+  try {
+    await sleep(2000);
+    if (e.remote("luaeval('package.loaded[\"render-markdown\"] ~= nil')") !== 'true') {
+      t.skip('render-markdown is not installed (scripts/install-markdown-editor.sh); the failure needs it');
+      return;
+    }
+    for (const line of [3, 4, 5]) {  // header, delimiter, row
+      e.tmux('send-keys', '-t', 'e', `:${line}`, 'Enter');
+      await until(() => e.remote("line('.')") === String(line), `cursor on line ${line}`);
+      await sleep(500);
+      assert.ok(table().includes('├') && !/\||---/.test(table()), `line ${line} under the cursor:\n${table()}`);
+    }
+    e.tmux('send-keys', '-t', 'e', 'i');
+    await until(() => table().includes('|---|---|'), 'typing shows the Markdown');
+  } finally {
+    e.stop();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
 test('a removed working directory does not break rendering', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'markdown-editor-'));
   mkdirSync(join(dir, 'worktree'));

@@ -67,6 +67,10 @@ if ok then
     checkbox = { unchecked = { icon = '☐ ' }, checked = { icon = '☑ ' }, custom = { todo = { rendered = '◐ ' } } },
     link = { enabled = false },
     callout = callouts,
+    -- Outside typing the cursor's line stays rendered, as the rest of the document; by default its raw
+    -- Markdown showed, so a table row became `|---|---|` between drawn borders. Typing shows raw text.
+    anti_conceal = { enabled = false },
+    win_options = { concealcursor = { rendered = 'nc' } },
   })
 end
 
