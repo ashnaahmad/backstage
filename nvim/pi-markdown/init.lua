@@ -21,8 +21,8 @@ vim.o.shortmess = vim.o.shortmess .. 'I'
 vim.keymap.set('n', 'w', '<Cmd>write<CR>', { desc = 'Save Markdown' })
 vim.keymap.set('n', 'q', '<Cmd>confirm qall<CR>', { desc = 'Close Markdown editor' })
 -- Text selected by dragging the mouse: Backspace (the Mac delete key) deletes it, as in other editors,
--- rather than moving the cursor. `p` pastes it back. From typing, the deletion returns to typing.
-vim.keymap.set('x', '<BS>', 'd', { desc = 'Delete the selection' })
+-- rather than moving the cursor. From typing, the deletion returns to typing.
+vim.keymap.set('x', '<BS>', '"_d', { desc = 'Delete the selection' })
 -- While typing, only Esc stops typing. A drag or double/triple click would otherwise switch to Visual
 -- mode, where the next letter typed runs as a command. Select mode instead replaces the selection with
 -- what is typed, and the delete key removes it, both continuing to type. Outside typing, mouse
@@ -30,17 +30,29 @@ vim.keymap.set('x', '<BS>', 'd', { desc = 'Delete the selection' })
 vim.api.nvim_create_autocmd('ModeChanged', { pattern = '*:i', callback = function() vim.o.selectmode = 'mouse' end })
 vim.api.nvim_create_autocmd('ModeChanged', { pattern = '*:n', callback = function() vim.o.selectmode = '' end })
 
--- Copying to the system clipboard. The terminal's Cmd-C and right-click Copy see no selection, since
--- the mouse belongs to Neovim. Outside typing, a mouse selection is copied when the button is released
--- and stays selected. While typing it is not, so selecting text and pasting replaces it with what was
--- copied elsewhere. Yanks (`y`) are copied too; deletions stay in Neovim, for `p`.
+-- One clipboard, shared with other apps and with the editor in every other panel (each its own Neovim):
+-- copying (`y`) and cutting (`dd`, `d` or `c` with a motion) put text there, and `p` pastes from it.
+-- The delete key, `x` and typing over a selection only delete, as in other editors; they use Neovim's
+-- own register, so selecting text while typing and pasting replaces it with what was copied.
+-- The terminal's Cmd-C and right-click Copy see no selection, since the mouse belongs to Neovim. Outside
+-- typing, a mouse selection is copied when the button is released and stays selected.
+vim.keymap.set('n', 'x', '"_x', { desc = 'Delete a letter' })
+vim.keymap.set({ 'n', 'x' }, 'p', '"+p', { desc = 'Paste the clipboard' })
+vim.keymap.set({ 'n', 'x' }, 'P', '"+P', { desc = 'Paste the clipboard before the cursor' })
+vim.api.nvim_create_autocmd('TextYankPost', {
+  callback = function()
+    local event = vim.v.event
+    if event.regname == '' and (event.operator == 'y' or not event.visual) then
+      vim.fn.setreg('+', event.regcontents, event.regtype)
+    end
+  end,
+})
+
 local function copy_selection()
   local mode = vim.fn.mode()
   if not mode:match('^[vV\22]$') then return end
   local lines = vim.fn.getregion(vim.fn.getpos('v'), vim.fn.getpos('.'), { type = mode })
-  local regtype = mode == 'V' and 'l' or mode == 'v' and 'c' or 'b'
-  vim.fn.setreg('+', lines, regtype)
-  vim.fn.setreg('"', lines, regtype)  -- and for `p`
+  vim.fn.setreg('+', lines, mode == 'V' and 'l' or mode == 'v' and 'c' or 'b')
 end
 for _, release in ipairs({ '<LeftRelease>', '<2-LeftRelease>', '<3-LeftRelease>', '<4-LeftRelease>' }) do
   vim.keymap.set('x', release, function()
@@ -48,12 +60,6 @@ for _, release in ipairs({ '<LeftRelease>', '<2-LeftRelease>', '<3-LeftRelease>'
     return release
   end, { expr = true, desc = 'Copy the mouse selection' })
 end
-vim.api.nvim_create_autocmd('TextYankPost', {
-  callback = function()
-    local event = vim.v.event
-    if event.operator == 'y' and event.regname == '' then vim.fn.setreg('+', event.regcontents, event.regtype) end
-  end,
-})
 
 local ok, render = pcall(require, 'render-markdown')
 if ok then
@@ -108,9 +114,9 @@ local HELP = {
   ' i  start typing      Esc  stop typing',
   ' w  save              q    close',
   ' u  undo              Ctrl-r  redo',
-  ' x  delete a letter   dd   delete the line',
-  ' p  paste what was deleted or copied',
-  ' y  copy a selection (a mouse selection copies itself)',
+  ' x  delete a letter   dd   cut the line',
+  ' y  copy a selection (a mouse drag copies itself)',
+  ' p  paste what was copied, here or elsewhere',
   ' /word Enter  find    n    next match',
   'Half-typed command or : line? Esc cancels it.',
 }

@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,12 +13,12 @@ const sleep = ms => new Promise(done => setTimeout(done, ms));
 let runs = 0;
 
 // An editor on `files`, started in `cwd` at the size of a narrow pane beside Pi.
-function editor(dir, cwd, files) {
+function editor(dir, cwd, files, options = '') {
   const server = `markdown-editor-${process.pid}-${++runs}`;
   const socket = join(dir, `nvim-${runs}.sock`);
   const tmux = (...args) => execFileSync('tmux', ['-L', server, ...args], { encoding: 'utf8' }).trim();
   tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'e', '-x', '55', '-y', '40', '-c', cwd,
-    `env XDG_STATE_HOME=${join(dir, 'state')} NVIM_APPNAME=pi-markdown nvim -u ${join(root, 'nvim/pi-markdown/init.lua')} --listen ${socket} ${files.join(' ')}`);
+    `env XDG_STATE_HOME=${join(dir, 'state')} NVIM_APPNAME=pi-markdown nvim ${options} -u ${join(root, 'nvim/pi-markdown/init.lua')} --listen ${socket} ${files.join(' ')}`);
   return {
     tmux,
     screen: () => tmux('capture-pane', '-p', '-t', 'e'),
@@ -82,6 +82,47 @@ test('outside typing, a table stays rendered on the cursor line; typing shows it
     await until(() => table().includes('|---|---|'), 'typing shows the Markdown');
   } finally {
     e.stop();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test('copies and cuts reach the clipboard shared by every panel; deleting leaves it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'markdown-editor-'));
+  const clip = join(dir, 'clip');
+  const read = () => { try { return readFileSync(clip, 'utf8'); } catch { return ''; } };
+  // A stand-in for the system clipboard, so the test never touches the real one.
+  writeFileSync(join(dir, 'clipboard.vim'), `let g:clipboard = {'name': 'test', 'cache_enabled': 0,
+    \\ 'copy': {'+': ['sh', '-c', 'cat > ${clip}'], '*': ['sh', '-c', 'cat > ${clip}']},
+    \\ 'paste': {'+': ['cat', '${clip}'], '*': ['cat', '${clip}']}}\n`);
+  writeFileSync(join(dir, 'a.md'), 'alpha beta\nsecond line\n');
+  writeFileSync(join(dir, 'b.md'), 'other\n');
+  const options = `--cmd 'source ${join(dir, 'clipboard.vim')}'`;
+  const a = editor(dir, dir, [join(dir, 'a.md')], options), b = editor(dir, dir, [join(dir, 'b.md')], options);
+  const keys = (e, ...k) => e.tmux('send-keys', '-t', 'e', ...k);
+  const mouse = (e, ...events) => { for (const event of events) keys(e, '-l', `\x1b[<${event}`); };
+  try {
+    await until(() => a.screen().includes('alpha beta') && b.screen().includes('other'), 'both editors are up');
+    const row = a.screen().split('\n').findIndex(line => line.startsWith('alpha')) + 1;
+    mouse(a, `0;1;${row}M`, `32;5;${row}M`, `0;5;${row}m`);
+    await until(() => read() === 'alpha', 'a mouse selection outside typing is copied on release');
+    keys(a, 'Escape');
+    keys(b, 'p');
+    await until(() => b.remote('getline(1)') === 'oalphather', 'p in another panel pastes it');
+    keys(a, 'g', 'g', '0', 'x');
+    await until(() => a.remote('getline(1)') === 'lpha beta', 'x deletes');
+    assert.equal(read(), 'alpha', 'x leaves the clipboard');
+    keys(a, 'j', 'd', 'd');
+    await until(() => read() === 'second line\n', 'dd cuts the line');
+    keys(a, 'g', 'g', '0', 'i');
+    await until(() => a.screen().includes('-- INSERT --'), 'typing');
+    mouse(a, `0;1;${row}M`, `32;3;${row}M`, `0;3;${row}m`);
+    await until(() => a.screen().includes('SELECT --'), 'a drag while typing selects to replace');
+    keys(a, 'BSpace');
+    await until(() => a.remote('getline(1)') === 'a beta', 'the delete key removes the selection');
+    assert.equal(read(), 'second line\n', 'deleting a selection while typing leaves the clipboard');
+  } finally {
+    a.stop();
+    b.stop();
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
 });

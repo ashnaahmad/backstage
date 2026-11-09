@@ -766,13 +766,17 @@ close (asks about unsaved edits), undo, delete, copy, paste
 and find. Clicking it returns to the document. The line
 beneath it names the document and shows the warnings below.
 
-The mouse belongs to Neovim, so the terminal's Cmd-C and
-right-click Copy find no selection. Outside typing, a mouse
-selection (drag, double or triple click) is copied to the
-system clipboard on release, and `y` copies too; deletions
-stay in Neovim's own register. While typing, a selection is
-not copied, so pasting over it inserts what was copied
-elsewhere.
+Copying uses the system clipboard, shared with other apps
+and with the editor in every other panel (each is its own
+Neovim): `y` copies, `dd` (or `d`/`c` with a motion) cuts,
+and `p` pastes from it. The delete key, `x` and typing over
+a selection only delete. The mouse belongs to Neovim, so
+the terminal's Cmd-C and right-click Copy find no selection
+(Terminal.app's Copy once replaced the clipboard with a
+space, so skip it). Outside
+typing, a mouse selection (drag, double or triple click) is
+copied on release. While typing, a selection is not copied,
+so pasting over it inserts what was copied elsewhere.
 
 The editor starts in the home directory, not the document's
 folder, so removing a worktree cannot leave it without a
