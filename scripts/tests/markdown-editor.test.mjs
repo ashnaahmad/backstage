@@ -187,12 +187,17 @@ test('writing view: the clean side without the cursor follows its file; closing 
   try {
     await until(() => e.screen().includes('# Left'), 'the editor is up');
     assert.equal(e.remote(`v:lua.PiMarkdownWrite('${hex(right)}')`), 'writing');
-    assert.deepEqual(sides(), ['left.md', 'right.md']);
-    assert.equal(e.remote("expand('%:t')"), 'left.md', 'the cursor stays on the current document');
+    assert.deepEqual(sides(), ['right.md', 'left.md'], 'the current document stays on the right');
+    assert.equal(e.remote("expand('%:t')"), 'left.md', 'with the cursor');
     assert.equal(e.remote('&laststatus'), '2', 'each side has its bar');
     await sleep(1200);
     writeFileSync(right, '# Right\n\nrewritten on disk\n');
     await until(() => e.screen().includes('rewritten on disk'), 'the clean side without the cursor reloads');
+    e.tmux('send-keys', '-t', 'e', '-l', '\x1b[<0;3;20M\x1b[<0;3;20m');  // a click on the left side
+    await until(() => e.remote("expand('%:t')") === 'right.md', 'a click moves the cursor there');
+    assert.equal(e.remote('v:lua.PiMarkdownSingle()'), 'single');
+    assert.deepEqual(sides(), ['left.md'], 'back to one document: the right side\'s, wherever the cursor was');
+    assert.equal(e.remote(`v:lua.PiMarkdownWrite('${hex(right)}')`), 'writing');
 
     // Only two documents: closing the right one leaves no spare, so its side closes.
     assert.match(e.remote(`v:lua.PiMarkdownCloseDoc('${hex(right)}', 'close')`), /^Closed right\.md/);
@@ -203,6 +208,140 @@ test('writing view: the clean side without the cursor follows its file; closing 
     assert.deepEqual(sides(), ['left.md', 'left.md']);
     assert.equal(e.remote('v:lua.PiMarkdownSingle()'), 'single');
     assert.deepEqual(sides(), ['left.md']);
+  } finally {
+    e.stop();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test('writing view: Open on left of the only document changes nothing rather than show it twice', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'markdown-editor-'));
+  const only = join(dir, 'only.md');
+  writeFileSync(only, '# Only\n');
+  const e = editor(dir, dir, [only]);
+  try {
+    await until(() => e.screen().includes('# Only'), 'the editor is up');
+    e.tmux('send-keys', '-t', 'e', 'G', 'o', 'unsaved only', 'Escape');
+    await until(() => e.remote('&modified') === '1', 'unsaved text');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${Buffer.from(only).toString('hex')}', '')`), 'alone');
+    assert.equal(e.remote("len(filter(getwininfo(), 'getwinvar(v:val.winid, \"&winfixbuf\") == 0'))"), '1', 'one side');
+    assert.equal(e.remote('&modified'), '1', 'its text kept');
+  } finally {
+    e.stop();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test('writing view: Open on left keeps the right side; copying and pasting between the sides, by mouse and keys, keeps both texts and saves each alone', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'markdown-editor-'));
+  const clip = join(dir, 'clip');
+  const read = () => { try { return readFileSync(clip, 'utf8'); } catch { return ''; } };
+  // A stand-in for the system clipboard, so the test never touches the real one.
+  writeFileSync(join(dir, 'clipboard.vim'), `let g:clipboard = {'name': 'test', 'cache_enabled': 0,
+    \\ 'copy': {'+': ['sh', '-c', 'cat > ${clip}'], '*': ['sh', '-c', 'cat > ${clip}']},
+    \\ 'paste': {'+': ['cat', '${clip}'], '*': ['cat', '${clip}']}}\n`);
+  const source = '# Source\n\nåäö — 日本語 😀\nsecond line ✓\n';
+  const files = { a: join(dir, 'a.md'), b: join(dir, 'b.md'), c: join(dir, 'c.md') };
+  writeFileSync(files.a, source);
+  writeFileSync(files.b, '# Dest\n');
+  writeFileSync(files.c, '# Third\n');
+  const e = editor(dir, dir, [files.b], `--cmd 'source ${join(dir, 'clipboard.vim')}'`);
+  const hex = file => Buffer.from(file).toString('hex');
+  const sides = () => JSON.parse(e.remote("json_encode(map(filter(getwininfo(), 'getwinvar(v:val.winid, \"&winfixbuf\") == 0'), 'fnamemodify(bufname(v:val.bufnr), \":t\")'))"));
+  const focused = () => e.remote("expand('%:t')");
+  const lines = name => JSON.parse(e.remote(`json_encode(getbufline(bufnr('${name}'), 1, '$'))`));
+  const modified = name => e.remote(`getbufvar(bufnr('${name}'), '&modified')`) === '1';
+  const keys = (...k) => e.tmux('send-keys', '-t', 'e', ...k);
+  // Paced as a person's gestures: sent straight after Escape, a mouse sequence can be read as part of it.
+  const mouse = async (...events) => { for (const event of events) { await sleep(200); keys('-l', `\x1b[<${event}`); } };
+  const disk = file => readFileSync(file, 'utf8');
+  // Screen position (1-based) of `text` in the left or right half.
+  const at = (text, side) => {
+    const rows = e.screen().split('\n');
+    const y = rows.findIndex(row => (side === 'left' ? row.split('│')[0] : row.split('│')[1] ?? '').includes(text));
+    assert.ok(y >= 0, `${text} on the ${side}:\n${e.screen()}`);
+    const row = rows[y], offset = side === 'left' ? 0 : row.indexOf('│') + 1;
+    return { x: [...row.slice(0, row.indexOf(text, offset))].length + 1, y: y + 1 };
+  };
+  try {
+    await until(() => e.screen().includes('# Dest'), 'the editor is up');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(files.a)}', '')`), 'writing');
+    assert.deepEqual(sides(), ['a.md', 'b.md'], 'the chosen document on the left; the one shown stays on the right');
+    assert.equal(focused(), 'a.md', 'the cursor on the left');
+    await until(() => e.screen().includes('日本語'), 'both are drawn');
+
+    // Unsaved text in the destination first, by a click into the right side and typing.
+    const dest = at('# Dest', 'right');
+    await mouse(`0;${dest.x};${dest.y}M`, `0;${dest.x};${dest.y}m`);
+    await until(() => focused() === 'b.md', 'a click moves the cursor to the right');
+    keys('G', 'o', 'typed before pasting', 'Escape');
+    await until(() => modified('b.md'), 'unsaved destination text');
+
+    // A mouse drag over the Unicode line on the left copies it on release.
+    const line = at('åäö', 'left');
+    // To past the line's end (15 cells wide), within the left side.
+    await mouse(`0;${line.x};${line.y}M`, `32;${line.x + 20};${line.y}M`, `0;${line.x + 20};${line.y}m`);
+    await until(() => read().startsWith('åäö — 日本語 😀'), `the drag copies the line (clipboard: ${JSON.stringify(read())})`);
+    keys('Escape');
+    await mouse(`0;${dest.x};${dest.y}M`, `0;${dest.x};${dest.y}m`);
+    await until(() => focused() === 'b.md', 'back on the right');
+    keys('G', 'o', 'Escape', 'p');
+    await until(() => lines('b.md').some(text => text.includes('åäö — 日本語 😀')), 'p pastes it on the right');
+
+    // Several lines, by keys: V j y on the left, p on the right.
+    const left = at('second line', 'left');
+    await mouse(`0;${left.x};${left.y}M`, `0;${left.x};${left.y}m`);
+    await until(() => focused() === 'a.md', 'a click returns to the left');
+    keys('g', 'g', 'j', 'j', 'V', 'j', 'y');
+    await until(() => read() === 'åäö — 日本語 😀\nsecond line ✓\n', `V j y copies both lines (clipboard: ${JSON.stringify(read())})`);
+    await mouse(`0;${dest.x};${dest.y}M`, `0;${dest.x};${dest.y}m`);
+    await until(() => focused() === 'b.md', 'on the right again');
+    keys('G', 'p');
+    await until(() => lines('b.md').slice(-2).join('\n') === 'åäö — 日本語 😀\nsecond line ✓', 'the lines are pasted below');
+    assert.ok(lines('b.md').includes('typed before pasting'), 'the destination keeps its unsaved text');
+    assert.deepEqual(lines('a.md'), source.trimEnd().split('\n'), 'copying leaves the source as it was');
+    assert.ok(!modified('a.md'), 'and unmodified');
+
+    // Each side saves alone.
+    keys('w');
+    await until(() => !modified('b.md'), 'w saves the right side');
+    assert.match(disk(files.b), /typed before pasting\n.*日本語 😀[\s\S]*second line ✓\n$/);
+    await mouse(`0;${left.x};${left.y}M`, `0;${left.x};${left.y}m`);
+    await until(() => focused() === 'a.md', 'left');
+    keys('G', 'o', 'left draft', 'Escape');
+    await until(() => modified('a.md'), 'unsaved text on the left');
+    await mouse(`0;${dest.x};${dest.y}M`, `0;${dest.x};${dest.y}m`);
+    await until(() => focused() === 'b.md', 'right');
+    keys('G', 'o', 'more', 'Escape', 'w');
+    await until(() => disk(files.b).endsWith('more\n'), 'the right saves again');
+    assert.equal(disk(files.a), source, 'the left\'s file is untouched');
+    assert.ok(modified('a.md') && lines('a.md').includes('left draft'), 'and its unsaved text kept');
+
+    // Open on left for the document on the right swaps the sides; for the one on the left, only the cursor moves.
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(files.b)}', '')`), 'writing');
+    assert.deepEqual(sides(), ['b.md', 'a.md'], 'never the same document twice');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(files.b)}', '')`), 'writing');
+    assert.deepEqual(sides(), ['b.md', 'a.md']);
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(files.c)}', '')`), 'writing');
+    assert.deepEqual(sides(), ['c.md', 'a.md'], 'another document replaces the left only');
+    assert.ok(modified('a.md') && lines('a.md').includes('left draft'), 'the right keeps its unsaved text throughout');
+
+    // The focused document with unsaved text can be asked for too: on the left already, the cursor stays; from
+    // one side, it moves left and another takes the right. Its text stays.
+    const right = at('# Source', 'right');
+    await mouse(`0;${right.x};${right.y}M`, `0;${right.x};${right.y}m`);
+    await until(() => focused() === 'a.md', 'the cursor on the right, in unsaved a.md');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(files.a)}', '')`), 'writing', 'the right side\'s modified document');
+    assert.deepEqual(sides(), ['a.md', 'c.md'], 'swapped');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(files.a)}', '')`), 'writing', 'asked again, focused and modified, on the left');
+    assert.deepEqual(sides(), ['a.md', 'c.md']);
+    assert.equal(e.remote('v:lua.PiMarkdownSingle()'), 'single');
+    assert.deepEqual(sides(), ['c.md'], 'back beside Pi: the right side\'s');
+    e.remote("execute('buffer a.md')");
+    assert.equal(focused(), 'a.md');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(files.a)}', '${hex(files.b)}')`), 'writing', 'from one side, focused and modified');
+    assert.deepEqual(sides(), ['a.md', 'c.md'], 'the right takes the document shown before');
+    assert.ok(modified('a.md') && lines('a.md').includes('left draft'), 'its unsaved text kept');
   } finally {
     e.stop();
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });

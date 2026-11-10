@@ -682,7 +682,12 @@ async function tabClient() {
       const lines = screen().split('\n');
       const y = lines.findIndex(line => line.includes(text));
       assert.ok(y >= 0, `${text} on screen`);
-      press([...lines[y].slice(0, lines[y].indexOf(text))].length + 1, y + 1);
+      const x = [...lines[y].slice(0, lines[y].indexOf(text))].length + 1;
+      // A menu acts on the item under the pointer, which a real mouse moves to first: without this motion
+      // a click on an item ran nothing (it only closed a menu).
+      outer('send-keys', '-t', 'outer', '-l', `\x1b[<35;${x};${y + 1}M`);
+      pause();
+      press(x, y + 1);
     },
     close() { try { outer('kill-server'); } catch {} tmux('set', '-g', 'status', 'on'); },
   };
@@ -921,7 +926,7 @@ test('writing view: two documents side by side in Pi\'s editor, Pi unseen but ru
     await lib.renderPanels(owner);
     click(1, '✎ Write');
     await waitFor(() => editor() && windowOf(editor()) !== piWindow && clientWindow() === windowOf(editor()), 'the editor opens in its own window, shown');
-    await waitFor(() => JSON.stringify(sides()) === '["wa.md","wb.md"]', 'two documents side by side');
+    await waitFor(() => JSON.stringify(sides()) === '["wb.md","wa.md"]', 'two documents side by side, the current one kept on the right');
     const writingWindow = windowOf(editor());
     assert.equal(tmux('display-message', '-p', '-t', writingWindow, '#{window_name}'), 'write');
     assert.deepEqual(tmux('list-panes', '-t', piWindow, '-F', '#{pane_id}').split('\n'), [owner], 'Pi keeps its window, alone');
@@ -932,40 +937,40 @@ test('writing view: two documents side by side in Pi\'s editor, Pi unseen but ru
     const evidence = process.env.DIFF_PANE_EVIDENCE;
     if (evidence) writeFileSync(join(evidence, 'writing-view.txt'), client.screen());
     // Each side has its own bar beneath it, naming its document.
-    await waitFor(() => client.screen().split('\n').some(line => /wa\.md .*│?.*wb\.md/.test(line) && !line.includes('Writing view')),
+    await waitFor(() => client.screen().split('\n').some(line => /wb\.md .*│?.*wa\.md/.test(line) && !line.includes('Writing view')),
       'each side names its document in its own bar');
 
     // Unsaved text on the focused side, then a tab click replaces only that side; the text stays behind it.
     tmux('send-keys', '-t', editor(), 'G', 'o', 'unsaved a', 'Escape');
     await waitFor(() => rows()[1].includes('wa.md ●'), 'the tab marks unsaved text');
-    await waitFor(() => client.screen().split('\n').some(line => /wa\.md \[\+\] unsaved .*wb\.md/.test(line)), 'the side\'s bar marks it too');
+    await waitFor(() => client.screen().split('\n').some(line => /wb\.md .*wa\.md \[\+\] unsaved/.test(line)), 'the side\'s bar marks it too');
     click(1, 'wc.md');
-    await waitFor(() => JSON.stringify(sides()) === '["wc.md","wb.md"]', 'a tab click changes the focused side');
+    await waitFor(() => JSON.stringify(sides()) === '["wb.md","wc.md"]', 'a tab click changes the focused side');
     assert.deepEqual(await unsaved(), ['wa.md'], 'the document left keeps its unsaved text');
     assert.equal(clientWindow(), writingWindow, 'the view stays');
     // A tab for a document on screen moves the cursor there instead.
     click(1, 'wb.md');
     await waitFor(() => focused() === 'wb.md', 'clicking the other side\'s document focuses it');
-    assert.deepEqual(sides(), ['wc.md', 'wb.md'], 'nothing is replaced');
+    assert.deepEqual(sides(), ['wb.md', 'wc.md'], 'nothing is replaced');
     const panels = tmux('show-options', '-pqv', '-t', editor(), '@pi_panels');
     for (const name of ['wb.md', 'wc.md']) assert.ok(panels.includes(`#[reverse] ${name}`), `${name}, on screen, is highlighted`);
     assert.ok(!panels.includes('#[reverse] wa.md'), 'a document behind is not');
     tmux('send-keys', '-t', editor(), 'G', 'o', 'unsaved b', 'Escape');
     click(1, 'wa.md');
-    await waitFor(() => JSON.stringify(sides()) === '["wc.md","wa.md"]' && focused() === 'wa.md', 'the focused side (now the right) takes it');
+    await waitFor(() => JSON.stringify(sides()) === '["wa.md","wc.md"]' && focused() === 'wa.md', 'the focused side (now the left) takes it');
     assert.ok(tmux('capture-pane', '-p', '-t', editor()).includes('unsaved a'), 'with its unsaved text');
     assert.deepEqual(await unsaved(), ['wa.md', 'wb.md']);
 
     // Closing a clean document on screen keeps both sides: one not on screen takes its place.
     click(1, '×', 'wc.md');
-    await waitFor(() => JSON.stringify(sides()) === '["wb.md","wa.md"]', 'the closed side takes the document behind');
+    await waitFor(() => JSON.stringify(sides()) === '["wa.md","wb.md"]', 'the closed side takes the document behind');
     await waitFor(() => !rows()[1].includes('wc.md'), 'its tab is gone');
     // Unsaved text on screen still asks.
     click(1, '×', 'wb.md');
     await waitFor(() => client.screen().includes('Unsaved changes in wb.md'), 'closing asks');
     client.outer('send-keys', '-t', 'outer', 'Escape');
     await sleep(500);
-    assert.deepEqual(sides(), ['wb.md', 'wa.md'], 'Escape keeps it');
+    assert.deepEqual(sides(), ['wa.md', 'wb.md'], 'Escape keeps it');
 
     // An agent change meanwhile adds its tab and does not take the editor out of the writing view.
     await tool('write', () => writeFileSync(docs.d, '# d\n\nagent d\n'));
@@ -985,11 +990,11 @@ test('writing view: two documents side by side in Pi\'s editor, Pi unseen but ru
     tmux('split-window', '-bdfh', '-l', '20', '-t', writingWindow, join(dir, 'ccmux'));
     await waitFor(() => tmux('list-panes', '-t', writingWindow, '-F', '#{pane_current_command}').includes('ccmux'), 'a sidebar beside the two documents');
     if (evidence) writeFileSync(join(evidence, 'writing-view-sidebar.txt'), client.screen());
-    const focusedBefore = focused();
+    assert.equal(focused(), 'wa.md', 'the cursor is on the left');
     click(1, 'π Show agent');
     await waitFor(() => windowOf(editor()) === piWindow && clientWindow() === piWindow, 'the editor returns beside Pi, which is shown');
     await waitFor(() => sides().length === 1, 'with one document');
-    assert.deepEqual(sides(), [focusedBefore], 'the side with the cursor');
+    assert.deepEqual(sides(), ['wb.md'], 'the right side\'s document, wherever the cursor was');
     assert.ok(!tmux('list-windows', '-F', '#{window_id}').split('\n').includes(writingWindow), 'the writing window has gone, sidebar included');
     assert.deepEqual(await unsaved(), ['wa.md', 'wb.md'], 'the other side\'s unsaved text stays behind');
     await waitFor(() => rows()[1].includes('✎ Write'), 'the switch offers the writing view again');
@@ -1005,6 +1010,86 @@ test('writing view: two documents side by side in Pi\'s editor, Pi unseen but ru
     assert.ok(editor(), 'unsaved text keeps it open');
     assert.deepEqual(await unsaved(), ['wa.md', 'wb.md']);
     assert.equal(tmux('show-options', '-pqv', '-t', editor(), '@pi_writing'), '', 'the writing mark is gone');
+  } finally {
+    for (const pane of docPanes(owner)) tmux('kill-pane', '-t', pane);
+    tmux('set-option', '-pu', '-t', owner, '@pi_docs');
+    client.close();
+    for (const file of Object.values(docs)) rmSync(file, { force: true });
+    await fire('session_start', {});
+  }
+});
+
+test('writing view: right-click on a document tab offers only Open on left, which keeps the right side and the same Pi running', async () => {
+  const client = await tabClient();
+  const { rows, click, clickText, screen } = client;
+  const docs = { a: join(dir, 'la.md'), b: join(dir, 'lb.md'), c: join(dir, 'lc.md') };
+  for (const [name, file] of Object.entries(docs)) writeFileSync(file, `# ${name}\n\n${name} text\n`);
+  const editor = () => docPanes(owner)[0];
+  const windowOf = pane => tmux('display-message', '-p', '-t', pane, '#{window_id}');
+  const piWindow = windowOf(owner);
+  const piProcess = tmux('display-message', '-p', '-t', owner, '#{pane_pid}');
+  const nvim = expr => execFileSync('nvim', ['--clean', '--server', tmux('show-options', '-pqv', '-t', editor(), '@pi_doc_server'), '--remote-expr', expr],
+    { encoding: 'utf8', timeout: 3000 }).trim();
+  const sides = () => JSON.parse(nvim("json_encode(map(filter(getwininfo(), 'getwinvar(v:val.winid, \"&winfixbuf\") == 0'), 'fnamemodify(bufname(v:val.bufnr), \":t\")'))"));
+  const clientWindow = () => tmux('display-message', '-p', '-c', tmux('list-clients', '-F', '#{client_name}'), '#{window_id}');
+  const piAlive = () => tmux('display-message', '-p', '-t', owner, '#{pane_dead} #{pane_pid}') === `0 ${piProcess}`;
+  // A right-click: button 3 in SGR mouse reporting.
+  const rightClick = (row, text) => {
+    execFileSync('sleep', ['0.4']);
+    const line = rows()[row];
+    const col = line.indexOf(text);
+    assert.ok(col >= 0, `${text} in ${JSON.stringify(line)}`);
+    const x = [...line.slice(0, col)].length + 1, y = 39 + row;
+    // One quick press and release: tmux's own menu (no -O) closes on a release that arrives after it opened.
+    client.outer('send-keys', '-t', 'outer', '-l', `\x1b[<2;${x};${y}M\x1b[<2;${x};${y}m`);
+  };
+  try {
+    await fire('before_agent_start', {});
+    await fire('session_start', {});
+    for (const file of [docs.a, docs.c, docs.b]) await extension.commands.get('edit').handler(file, context);
+    await waitFor(() => /lb\.md ×/.test(rows()[1]) && sides()[0] === 'lb.md', 'lb.md beside Pi');
+    tmux('send-keys', '-t', editor(), 'G', 'o', 'unsaved right', 'Escape');
+    await waitFor(() => rows()[1].includes('lb.md ●'), 'unsaved text beside Pi');
+
+    // The Windows row keeps tmux's own menu; the Panels row offers no window menu at all.
+    rightClick(0, 'π');
+    await waitFor(() => screen().includes('Respawn'), 'the Windows row keeps tmux\'s window menu');
+    client.outer('send-keys', '-t', 'outer', 'Escape');
+    await waitFor(() => !screen().includes('Respawn'), 'Escape closes it');
+    rightClick(1, 'Panels');
+    await sleep(800);
+    assert.ok(!/Kill|Respawn/.test(screen()), 'a right-click elsewhere on the Panels row shows nothing');
+
+    rightClick(1, 'la.md');
+    await waitFor(() => screen().includes('Open on left'), 'a document tab offers Open on left');
+    assert.ok(!/Kill|Respawn/.test(screen()), 'and nothing that would end Pi');
+    if (process.env.DIFF_PANE_EVIDENCE) writeFileSync(join(process.env.DIFF_PANE_EVIDENCE, 'open-on-left-menu.txt'), screen());
+    clickText('Open on left');
+    await waitFor(() => windowOf(editor()) !== piWindow && clientWindow() === windowOf(editor()), 'the writing view is shown');
+    await waitFor(() => JSON.stringify(sides()) === '["la.md","lb.md"]', 'the chosen document on the left, the one beside Pi kept on the right');
+    assert.ok(piAlive() && windowOf(owner) === piWindow, 'the same Pi runs on in its window');
+    assert.match(nvim('getbufline(bufnr("lb.md"), "$")[0]'), /unsaved right/, 'the right keeps its unsaved text');
+
+    // Already writing: the left is replaced, the right untouched; the right's document swaps over.
+    rightClick(1, 'lc.md');
+    await waitFor(() => screen().includes('Open on left'), 'the menu again');
+    clickText('Open on left');
+    await waitFor(() => JSON.stringify(sides()) === '["lc.md","lb.md"]', 'only the left changes');
+    rightClick(1, 'lb.md');
+    await waitFor(() => screen().includes('Open on left'), 'the menu for the right side\'s document');
+    clickText('Open on left');
+    await waitFor(() => JSON.stringify(sides()) === '["lb.md","lc.md"]', 'the sides swap rather than show it twice');
+    rightClick(1, 'lb.md');
+    await waitFor(() => screen().includes('Open on left'), 'the menu');
+    client.outer('send-keys', '-t', 'outer', 'Escape');
+    await waitFor(() => !screen().includes('Open on left'), 'Escape cancels');
+    assert.deepEqual(sides(), ['lb.md', 'lc.md'], 'nothing changed');
+
+    click(1, 'π Show agent');
+    await waitFor(() => windowOf(editor()) === piWindow && clientWindow() === piWindow, 'back to Pi');
+    await waitFor(() => JSON.stringify(sides()) === '["lc.md"]', 'beside it the right side\'s document');
+    assert.ok(piAlive(), 'the same Pi, never restarted');
+    assert.match(nvim('getbufline(bufnr("lb.md"), "$")[0]'), /unsaved right/, 'unsaved text kept behind');
   } finally {
     for (const pane of docPanes(owner)) tmux('kill-pane', '-t', pane);
     tmux('set-option', '-pu', '-t', owner, '@pi_docs');

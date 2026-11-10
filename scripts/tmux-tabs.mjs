@@ -3,6 +3,8 @@
 //   tmux-tabs.mjs px%N <client>         close preview %N (an editor with unsaved text asks first)
 //   tmux-tabs.mjs ds%P:ID <client>      show Pi %P's document with that id in its editor beside it
 //   tmux-tabs.mjs dx%P:ID <client>      close that document (unsaved text asks first)
+//   tmux-tabs.mjs menu ds%P:ID <client> right-click on that document's tab: a menu to open it on the left
+//   tmux-tabs.mjs open-left %P:ID <client>     from that menu: the document on the left of the writing view
 //   tmux-tabs.mjs close-file %P <hex path> save|discard <client>   from a document's close menu
 //   tmux-tabs.mjs w@N <client>          close window @N after a menu confirms it
 //   tmux-tabs.mjs wv%P <client>         turn Pi %P's writing view on or off (two documents, Pi unseen)
@@ -18,7 +20,7 @@ import { basename } from 'node:path';
 import {
   DIFF_OWNER, DOC_OWNER, PI_WINDOW, TABS, allPanes,
   bringBeside, closeDocument, docId, docServer, documents, dropSidebarOnly, editorState, findExecutable, layoutOf, paneExists, releaseOrphans,
-  remoteExpr, renderPanels, selectDocument, setWriting, tmux,
+  openOnLeft, remoteExpr, renderPanels, selectDocument, setWriting, tmux,
 } from './lib/diff-pane.ts';
 
 const nvim = findExecutable('nvim');
@@ -148,6 +150,22 @@ async function selectDoc(range, client) {
   if (warning) await notice(client, warning);
 }
 
+// Where to open a document: only placements, so a right-click never offers to end Pi. Escape cancels.
+async function documentMenu(range, client) {
+  const { file } = await documentAt(range);
+  if (!file) return;
+  await tmux('display-menu', '-O', '-M', '-c', client, '-x', 'C', '-y', 'S', '-T', basename(file).replaceAll('#', '##'), '--',
+    'Open on left', 'l', again('open-left', range, client));
+}
+
+async function openLeft(range, client) {
+  const { owner, file } = await documentAt(range);
+  if (!file) return;
+  const { window, message, warning } = await openOnLeft(owner, file, { nvim });
+  if (window) await showWindow(client, window);
+  if (message || warning) await notice(client, message ?? warning);
+}
+
 async function toggleWriting(owner, client) {
   const { window, message, warning } = await setWriting(owner, undefined, { nvim });
   if (window) await showWindow(client, window);
@@ -180,10 +198,12 @@ async function closeDoc(pane, how, client) {
 }
 
 // The clicking client: last argument of the follow-up actions, second of a click.
-const client = { 'close-doc': process.argv[5], 'close-file': process.argv[6], 'kill-window': extra }[action] ?? target;
+const client = { 'close-doc': process.argv[5], 'close-file': process.argv[6], 'kill-window': extra, menu: extra, 'open-left': extra }[action] ?? target;
 try {
   if (action?.startsWith('ps%')) await select(action.slice(2), target);
   else if (action?.startsWith('px%')) await close(action.slice(2), target);
+  else if (action === 'menu' && target?.startsWith('ds%')) await documentMenu(target.slice(2), extra);
+  else if (action === 'open-left') await openLeft(target, extra);
   else if (action?.startsWith('wv%')) await toggleWriting(action.slice(2), target);
   else if (action?.startsWith('w@')) await confirmWindow(action.slice(1), target);
   else if (action?.startsWith('ds%')) await selectDoc(action.slice(2), target);

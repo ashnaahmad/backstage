@@ -617,20 +617,31 @@ installed, the bottom of the terminal has two labelled rows:
   document closes the editor. Repositories without changes
   have no tab.
 
-**Writing view.** `✎ Write`, first in the Panels row once Pi has a document,
-moves Pi's editor into its own `write` window with two
-documents side by side: the current one, with the cursor,
-and the one shown before it (else Pi's next document). Pi
-keeps running in its window, unseen; Ctrl+Q adds a sidebar
-to the writing window, the third panel. A document tab then
+**Writing view.** Pi's editor in its own `write` window with
+two documents side by side, while Pi keeps running in its
+window, unseen: the left side takes Pi's place, and the right
+keeps the document that was beside Pi. Two ways in, both in
+the Panels row, once Pi has a document: `✎ Write` (first in
+the row) puts another document on the left (the one shown
+before, else Pi's next); right-clicking a document tab offers
+only `Open on left`, which puts that document on the left
+(already writing, it replaces only the left; the right side's
+document swaps sides rather than show twice; for Pi's only
+document it says another is needed and changes nothing). A right-click
+never offers tmux's window menu there, whose Kill and Respawn
+would end Pi; the Windows row keeps it. Ctrl+Q adds a sidebar
+to the writing window, the third panel. A document tab click
 fills the side with the cursor, or puts the cursor on the
 side already showing it; each side has its own bar beneath
-it. The document a side leaves keeps its unsaved text, and
-closing a document on screen fills its side with one that
-is not, or closes that side. Agent changes add tabs as
-usual but never take the editor out of the writing view,
-nor does `/panel`. `π Show agent` (the same place) returns
-the editor beside Pi with the side that had the cursor; Pi
+it. Copying and pasting between the sides uses the one
+clipboard described below: a mouse drag or `y` on one side,
+`p` on the other; each side saves on its own with `w`. The
+document a side leaves keeps its unsaved text, and closing a
+document on screen fills its side with one that is not, or
+closes that side. Agent changes add tabs as usual but never
+take the editor out of the writing view, nor does `/panel`.
+`π Show agent` (first in the row) brings Pi back with the
+right side's document beside it, wherever the cursor was; Pi
 quitting does the same before its unsaved check. It is one
 Neovim, so unsaved text, saving and closing behave as above.
 After updating, run `tmux source-file ~/.tmux.conf` so the

@@ -512,17 +512,18 @@ async function answering(nvim, pane) {
 
 /**
  * The writing view: Pi's editor in its own window, two documents side by side (PiMarkdownWrite), while Pi
- * keeps running, unseen, in its window. `on` true turns it on, false off, undefined toggles, decided under
+ * keeps running, unseen, in its window. The right side is the document that was beside Pi and stays when
+ * Pi returns; the left takes Pi's place. `on` true turns it on, false off, undefined toggles, decided under
  * the lock. On: starts the editor on Pi's first document if none is open; Pi with no documents has
- * nothing to write in. Off: back to one document, the side with the cursor, beside Pi; the other keeps
- * its text behind it. Only this and Pi quitting end it: nothing else moves the editor (bringBeside), so
+ * nothing to write in. Off: Pi back on the left, with the right side's document beside it; the left one
+ * keeps its text behind it. Only this and Pi quitting end it: nothing else moves the editor (bringBeside), so
  * document choices meanwhile open in the writing view. Returns `{ window, message, warning }`: the
  * window to show, and why nothing changed.
  */
 export function setWriting(owner, on, { nvim = findExecutable('nvim') } = {}) {
   return changing(owner, nvim, async () => {
     const place = await layoutOf(owner);
-    let editor = place.previews.find(preview => preview.key === 'doc');
+    const editor = place.previews.find(preview => preview.key === 'doc');
     if (!(on ?? !editor?.writing)) {
       if (!editor) return { window: place.window };
       // The view ends once the editor is beside Pi: a failed move leaves it whole, to try again. An editor
@@ -533,22 +534,46 @@ export function setWriting(owner, on, { nvim = findExecutable('nvim') } = {}) {
       return { window: place.window };
     }
     if (editor?.writing) return { window: editor.window };
-    const files = (await documents(owner)).filter(file => existsSync(file));
-    if (!editor) {
-      if (!files.length) return { message: 'No document to write in: open one with /edit or /panels.' };
-      const id = await startEditor(owner, place, files[0], nvim);
-      editor = (await layoutOf(owner)).previews.find(preview => preview.id === id);
-      if (!editor || !await answering(nvim, id)) return { message: 'The editor did not start; try again.' };
-    }
-    const current = (await editorState(nvim, editor.id))?.current;
-    const other = files.find(file => file !== current) ?? '';
-    const reply = await remoteExpr(nvim, await docServer(editor.id), `v:lua.PiMarkdownWrite('${hex(other)}')`);
-    if (reply !== 'writing' && reply !== 'already') return { message: 'The editor has no document to write in.' };
-    if (editor.window === place.window) await tmux('break-pane', '-d', '-a', '-s', editor.id, '-t', place.window, '-n', 'write');
-    else await tmux('rename-window', '-t', editor.id, 'write');
-    await tmux('set-option', '-p', '-t', editor.id, WRITING, '1');
-    return { window: (await tmux('display-message', '-p', '-t', editor.id, '#{window_id}')).trim() };
+    return enterWriting(owner, place, editor, undefined, nvim, other => `v:lua.PiMarkdownWrite('${hex(other)}')`);
   });
+}
+
+/**
+ * Open on left, from a document tab's menu: `file` takes the left side of the writing view, which turns on
+ * if it is off, and the right keeps the document shown there or beside Pi (PiMarkdownOpenLeft). Pi keeps
+ * running, unseen. Returns as setWriting does.
+ */
+export function openOnLeft(owner, file, { nvim = findExecutable('nvim') } = {}) {
+  return changing(owner, nvim, async () => {
+    await addDocuments(owner, [file]);
+    const place = await layoutOf(owner);
+    return enterWriting(owner, place, place.previews.find(preview => preview.key === 'doc'), file, nvim,
+      other => `v:lua.PiMarkdownOpenLeft('${hex(file)}', '${hex(other)}')`);
+  });
+}
+
+// Under the lock: lays out the editor's two sides with `expr(other)`, `other` being another of Pi's documents
+// for a side that needs one, then moves the editor to its own window, unless it is there already. Starts the
+// editor (on `file`, else Pi's first document) when none is open.
+async function enterWriting(owner, place, editor, file, nvim, expr) {
+  const files = (await documents(owner)).filter(entry => existsSync(entry));
+  if (!editor) {
+    const first = file ?? files[0];
+    if (!first) return { message: 'No document to write in: open one with /edit or /panels.' };
+    const id = await startEditor(owner, place, first, nvim);
+    editor = (await layoutOf(owner)).previews.find(preview => preview.id === id);
+    if (!editor || !await answering(nvim, id)) return { message: 'The editor did not start; try again.' };
+  }
+  const current = (await editorState(nvim, editor.id))?.current;
+  const other = files.find(entry => entry !== current && entry !== file) ?? '';
+  const reply = await remoteExpr(nvim, await docServer(editor.id), expr(other));
+  if (reply === 'alone') return { message: `${basename(file)} is the only document: open another to write beside it.` };
+  if (reply !== 'writing' && reply !== 'already') return { message: 'The editor has no document to write in.' };
+  if (editor.writing) return { window: editor.window };
+  if (editor.window === place.window) await tmux('break-pane', '-d', '-a', '-s', editor.id, '-t', place.window, '-n', 'write');
+  else await tmux('rename-window', '-t', editor.id, 'write');
+  await tmux('set-option', '-p', '-t', editor.id, WRITING, '1');
+  return { window: (await tmux('display-message', '-p', '-t', editor.id, '#{window_id}')).trim() };
 }
 
 /**
