@@ -703,7 +703,7 @@ test('bottom tab rows: real mouse clicks select and close previews and windows; 
     await tool('write', () => writeFileSync(notes, '# Notes\n\ntab notes\n'));
     const [diff] = diffPanes(owner), [doc] = docPanes(owner);
     assert.deepEqual(beside(), [doc], 'the editor is beside Pi; Hunk waits');
-    await waitFor(() => /^Panels +Diff: repo ×.* notes\.md ×/.test(rows()[1]), 'the Panels row names both previews');
+    await waitFor(() => /^Panels +✎ Write +Diff: repo ×.* notes\.md ×/.test(rows()[1]), 'the Panels row names both previews, after the writing view\'s switch');
     assert.match(rows()[0], /^Windows .*π /, 'the Windows row is labelled and marks Pi');
     assert.ok(!rows()[0].includes('diff:repo'), 'the waiting preview is not also a window tab');
 
@@ -711,7 +711,7 @@ test('bottom tab rows: real mouse clicks select and close previews and windows; 
     if (evidence) writeFileSync(join(evidence, 'tab-rows-open.txt'), screenOuter());
     click(1, 'Diff: repo');
     await waitFor(() => beside()[0] === diff, 'clicking a Panels tab shows it beside Pi');
-    await waitFor(() => tmux('show-options', '-pqv', '-t', owner, '@pi_panels').startsWith('#[range=user|ps' + diff + ']#[reverse]'), 'the shown tab is highlighted');
+    await waitFor(() => tmux('show-options', '-pqv', '-t', owner, '@pi_panels').includes('#[range=user|ps' + diff + ']#[reverse]'), 'the shown tab is highlighted');
 
     // Unsaved editor text: × asks; Escape keeps it; Save writes and closes.
     tmux('send-keys', '-t', doc, 'G', 'o', 'unsaved tab text', 'Escape');
@@ -890,6 +890,159 @@ test('document switches show the document even after its file changed under unsa
     if (otherPi) tmux('kill-pane', '-t', otherPi);
     tmux('set-option', '-pu', '-t', owner, '@pi_docs');
     client.close();
+  }
+});
+
+test('writing view: two documents side by side in Pi\'s editor, Pi unseen but running; tabs fill the focused side; unsaved text survives every transition', async () => {
+  const client = await tabClient();
+  const { rows, click } = client;
+  const lib = await import(pathToFileURL(join(root, 'scripts/lib/diff-pane.ts')).href);
+  const docs = { a: join(dir, 'wa.md'), b: join(dir, 'wb.md'), c: join(dir, 'wc.md'), d: join(repo, 'wd.md') };
+  for (const [name, file] of Object.entries(docs)) writeFileSync(file, `# ${name}\n\n${name} text\n`);
+  const editor = () => docPanes(owner)[0];
+  const windowOf = pane => tmux('display-message', '-p', '-t', pane, '#{window_id}');
+  const piWindow = windowOf(owner);
+  const nvim = expr => execFileSync('nvim', ['--clean', '--server', tmux('show-options', '-pqv', '-t', editor(), '@pi_doc_server'), '--remote-expr', expr],
+    { encoding: 'utf8', timeout: 3000 }).trim();
+  const sides = () => JSON.parse(nvim("json_encode(map(filter(getwininfo(), 'getwinvar(v:val.winid, \"&winfixbuf\") == 0'), 'fnamemodify(bufname(v:val.bufnr), \":t\")'))"));
+  const focused = () => nvim("expand('%:t')");
+  const state = async () => lib.editorState('nvim', editor());
+  const unsaved = async () => [...(await state()).unsaved].map(file => basename(file)).sort();
+  const clientWindow = () => tmux('display-message', '-p', '-c', tmux('list-clients', '-F', '#{client_name}'), '#{window_id}');
+  try {
+    await fire('before_agent_start', {});
+    await fire('session_start', {});
+    for (const file of [docs.a, docs.b, docs.c]) await extension.commands.get('edit').handler(file, context);
+    await waitFor(() => /^Panels +✎ Write +wa\.md ×.*wb\.md ×.*wc\.md ×/.test(rows()[1]), 'the switch leads the row once there are documents');
+
+    // With the editor closed, the switch starts it on Pi's first document, beside the next.
+    tmux('send-keys', '-t', editor(), ':qa', 'Enter');
+    await waitFor(() => !editor(), 'the user closes the editor');
+    await lib.renderPanels(owner);
+    click(1, '✎ Write');
+    await waitFor(() => editor() && windowOf(editor()) !== piWindow && clientWindow() === windowOf(editor()), 'the editor opens in its own window, shown');
+    await waitFor(() => JSON.stringify(sides()) === '["wa.md","wb.md"]', 'two documents side by side');
+    const writingWindow = windowOf(editor());
+    assert.equal(tmux('display-message', '-p', '-t', writingWindow, '#{window_name}'), 'write');
+    assert.deepEqual(tmux('list-panes', '-t', piWindow, '-F', '#{pane_id}').split('\n'), [owner], 'Pi keeps its window, alone');
+    assert.equal(tmux('display-message', '-p', '-t', owner, '#{pane_dead}'), '0', 'Pi still runs');
+    await waitFor(() => rows()[1].includes('π Show agent'), 'the switch offers the way back');
+    assert.ok(!rows()[0].includes(':write'), 'the writing window is not a Windows tab');
+    assert.equal(focused(), 'wa.md');
+    const evidence = process.env.DIFF_PANE_EVIDENCE;
+    if (evidence) writeFileSync(join(evidence, 'writing-view.txt'), client.screen());
+    // Each side has its own bar beneath it, naming its document.
+    await waitFor(() => client.screen().split('\n').some(line => /wa\.md .*│?.*wb\.md/.test(line) && !line.includes('Writing view')),
+      'each side names its document in its own bar');
+
+    // Unsaved text on the focused side, then a tab click replaces only that side; the text stays behind it.
+    tmux('send-keys', '-t', editor(), 'G', 'o', 'unsaved a', 'Escape');
+    await waitFor(() => rows()[1].includes('wa.md ●'), 'the tab marks unsaved text');
+    await waitFor(() => client.screen().split('\n').some(line => /wa\.md \[\+\] unsaved .*wb\.md/.test(line)), 'the side\'s bar marks it too');
+    click(1, 'wc.md');
+    await waitFor(() => JSON.stringify(sides()) === '["wc.md","wb.md"]', 'a tab click changes the focused side');
+    assert.deepEqual(await unsaved(), ['wa.md'], 'the document left keeps its unsaved text');
+    assert.equal(clientWindow(), writingWindow, 'the view stays');
+    // A tab for a document on screen moves the cursor there instead.
+    click(1, 'wb.md');
+    await waitFor(() => focused() === 'wb.md', 'clicking the other side\'s document focuses it');
+    assert.deepEqual(sides(), ['wc.md', 'wb.md'], 'nothing is replaced');
+    const panels = tmux('show-options', '-pqv', '-t', editor(), '@pi_panels');
+    for (const name of ['wb.md', 'wc.md']) assert.ok(panels.includes(`#[reverse] ${name}`), `${name}, on screen, is highlighted`);
+    assert.ok(!panels.includes('#[reverse] wa.md'), 'a document behind is not');
+    tmux('send-keys', '-t', editor(), 'G', 'o', 'unsaved b', 'Escape');
+    click(1, 'wa.md');
+    await waitFor(() => JSON.stringify(sides()) === '["wc.md","wa.md"]' && focused() === 'wa.md', 'the focused side (now the right) takes it');
+    assert.ok(tmux('capture-pane', '-p', '-t', editor()).includes('unsaved a'), 'with its unsaved text');
+    assert.deepEqual(await unsaved(), ['wa.md', 'wb.md']);
+
+    // Closing a clean document on screen keeps both sides: one not on screen takes its place.
+    click(1, '×', 'wc.md');
+    await waitFor(() => JSON.stringify(sides()) === '["wb.md","wa.md"]', 'the closed side takes the document behind');
+    await waitFor(() => !rows()[1].includes('wc.md'), 'its tab is gone');
+    // Unsaved text on screen still asks.
+    click(1, '×', 'wb.md');
+    await waitFor(() => client.screen().includes('Unsaved changes in wb.md'), 'closing asks');
+    client.outer('send-keys', '-t', 'outer', 'Escape');
+    await sleep(500);
+    assert.deepEqual(sides(), ['wb.md', 'wa.md'], 'Escape keeps it');
+
+    // An agent change meanwhile adds its tab and does not take the editor out of the writing view.
+    await tool('write', () => writeFileSync(docs.d, '# d\n\nagent d\n'));
+    await waitFor(() => rows()[1].includes('wd.md'), 'the changed document has a tab');
+    assert.equal(windowOf(editor()), writingWindow, 'the editor stays in the writing view');
+    assert.deepEqual(await unsaved(), ['wa.md', 'wb.md'], 'unsaved text is untouched');
+    notices = [];
+    await extension.commands.get('panel').handler('edit', context);
+    assert.equal(windowOf(editor()), writingWindow, '/panel edit leaves it too');
+    assert.match(notices.join(' '), /writing view/, 'and says why');
+
+    // A sidebar in the writing window makes the third panel; returning to agent view leaves no window behind.
+    if (!existsSync(join(dir, 'ccmux'))) {
+      writeFileSync(join(dir, 'ccmux.c'), '#include <unistd.h>\nint main(void){for(;;)pause();}\n');
+      execFileSync('cc', ['-o', join(dir, 'ccmux'), join(dir, 'ccmux.c')], { stdio: 'ignore' });
+    }
+    tmux('split-window', '-bdfh', '-l', '20', '-t', writingWindow, join(dir, 'ccmux'));
+    await waitFor(() => tmux('list-panes', '-t', writingWindow, '-F', '#{pane_current_command}').includes('ccmux'), 'a sidebar beside the two documents');
+    if (evidence) writeFileSync(join(evidence, 'writing-view-sidebar.txt'), client.screen());
+    const focusedBefore = focused();
+    click(1, 'π Show agent');
+    await waitFor(() => windowOf(editor()) === piWindow && clientWindow() === piWindow, 'the editor returns beside Pi, which is shown');
+    await waitFor(() => sides().length === 1, 'with one document');
+    assert.deepEqual(sides(), [focusedBefore], 'the side with the cursor');
+    assert.ok(!tmux('list-windows', '-F', '#{window_id}').split('\n').includes(writingWindow), 'the writing window has gone, sidebar included');
+    assert.deepEqual(await unsaved(), ['wa.md', 'wb.md'], 'the other side\'s unsaved text stays behind');
+    await waitFor(() => rows()[1].includes('✎ Write'), 'the switch offers the writing view again');
+    assert.equal(nvim('&laststatus'), '0', 'one document has its bar above it, as before');
+    if (evidence) writeFileSync(join(evidence, 'writing-view-back.txt'), client.screen());
+
+    // Pi quitting from the writing view brings the editor back first; unsaved text keeps it open.
+    click(1, '✎ Write');
+    await waitFor(() => windowOf(editor()) !== piWindow && sides().length === 2, 'the writing view again');
+    await fire('session_shutdown', { reason: 'quit' });
+    await waitFor(() => windowOf(editor()) === piWindow && sides().length === 1, 'quit brings the editor beside Pi');
+    await sleep(500);
+    assert.ok(editor(), 'unsaved text keeps it open');
+    assert.deepEqual(await unsaved(), ['wa.md', 'wb.md']);
+    assert.equal(tmux('show-options', '-pqv', '-t', editor(), '@pi_writing'), '', 'the writing mark is gone');
+  } finally {
+    for (const pane of docPanes(owner)) tmux('kill-pane', '-t', pane);
+    tmux('set-option', '-pu', '-t', owner, '@pi_docs');
+    client.close();
+    for (const file of Object.values(docs)) rmSync(file, { force: true });
+    await fire('session_start', {});
+  }
+});
+
+test('writing view: an editor that cannot come back beside a quitting Pi stays whole, findable and still marked', async () => {
+  const lib = await import(pathToFileURL(join(root, 'scripts/lib/diff-pane.ts')).href);
+  const docs = [join(dir, 'stuck-a.md'), join(dir, 'stuck-b.md')];
+  for (const file of docs) writeFileSync(file, '# stuck\n');
+  const piWindow = tmux('display-message', '-p', '-t', owner, '#{window_id}');
+  try {
+    await fire('session_start', {});
+    for (const file of docs) await extension.commands.get('edit').handler(file, context);
+    const { window } = await lib.setWriting(owner, true);
+    const [doc] = docPanes(owner);
+    assert.equal(tmux('display-message', '-p', '-t', doc, '#{window_id}'), window);
+    tmux('send-keys', '-t', doc, 'G', 'o', 'stuck unsaved', 'Escape');
+    await waitFor(() => screen(doc).includes('stuck unsaved'), 'unsaved text typed');
+    // Too narrow for a second pane: join-pane fails.
+    tmux('resize-window', '-t', piWindow, '-x', '2');
+    await fire('session_shutdown', { reason: 'quit' });
+    assert.deepEqual(docPanes(owner), [doc], 'the editor keeps its unsaved text');
+    assert.equal(tmux('display-message', '-p', '-t', doc, '#{window_id}'), window, 'in its own window');
+    assert.equal(tmux('show-options', '-wqv', '-t', window, '@pi_preview_window'), '', 'listed in the Windows row');
+    assert.equal(tmux('show-options', '-wqv', '-t', window, '@pi_panels'), '', 'with no row of the Pi that left');
+    assert.equal(tmux('show-options', '-pqv', '-t', doc, '@pi_writing'), '1', 'still a writing view, both sides');
+    assert.equal(execFileSync('nvim', ['--clean', '--server', tmux('show-options', '-pqv', '-t', doc, '@pi_doc_server'), '--remote-expr', "len(filter(getwininfo(), 'getwinvar(v:val.winid, \"&winfixbuf\") == 0'))"], { encoding: 'utf8' }).trim(), '2');
+  } finally {
+    tmux('set-option', '-wu', '-t', piWindow, 'window-size');
+    tmux('resize-window', '-t', piWindow, '-x', '240', '-y', '50');
+    for (const pane of docPanes(owner)) tmux('kill-pane', '-t', pane);
+    tmux('set-option', '-pu', '-t', owner, '@pi_docs');
+    for (const file of docs) rmSync(file, { force: true });
+    await fire('session_start', {});
   }
 });
 
@@ -1251,7 +1404,7 @@ test('an agent change shows its diff in place of a saved editor; unsaved text, n
     const [doc] = docPanes(pi.pane);
     assert.ok(await screenContains(doc, 'saved state'));
     // The editor's command index is a scratch buffer of its own: it is not unsaved text.
-    assert.deepEqual(await state(doc), { current: realpathSync(file), unsaved: new Set(), modified: 0 }, 'a saved editor has nothing unsaved');
+    assert.deepEqual(await state(doc), { current: realpathSync(file), shown: new Set([realpathSync(file)]), unsaved: new Set(), modified: 0 }, 'a saved editor has nothing unsaved');
 
     await code('beside a saved editor');
     const [diff] = diffPanes(pi.pane);
@@ -1267,7 +1420,7 @@ test('an agent change shows its diff in place of a saved editor; unsaved text, n
 
     tmux('send-keys', '-t', doc, ':e!', 'Enter', ':enew', 'Enter', 'i', 'unnamed draft', 'Escape');
     await waitFor(() => screen(doc).includes('unnamed draft'), 'unnamed text typed');
-    assert.deepEqual(await state(doc), { current: '', unsaved: new Set(), modified: 1 }, 'text in an unnamed buffer is unsaved');
+    assert.deepEqual(await state(doc), { current: '', shown: new Set(), unsaved: new Set(), modified: 1 }, 'text in an unnamed buffer is unsaved');
     await code('beside unnamed text');
     assert.deepEqual(beside(), [doc], 'unnamed unsaved text keeps the editor beside Pi');
   } finally {

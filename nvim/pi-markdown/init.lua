@@ -121,16 +121,30 @@ local HELP = {
   'Half-typed command or : line? Esc cancels it.',
 }
 local help_buf, help_win
+-- The windows showing documents: one, or two side by side in the writing view (PiMarkdownWrite).
+local function document_windows()
+  return vim.tbl_filter(function(win)
+    return win ~= help_win and vim.api.nvim_win_get_config(win).relative == ''
+  end, vim.api.nvim_tabpage_list_wins(0))
+end
+-- The document window with the cursor, else the first.
 local function document_window()
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if win ~= help_win and vim.api.nvim_win_get_config(win).relative == '' then return win end
-  end
+  local docs, current = document_windows(), vim.api.nvim_get_current_win()
+  return vim.tbl_contains(docs, current) and current or docs[1]
 end
 
--- The document's name and state, or a warning, on the line between the index and the document.
+-- A document's name and state, or a warning. With one document it is the line between the index and the
+-- document; in the writing view each side has its own beneath it, highlighted for the side with the cursor.
+-- While a status line's %{} item is evaluated, the current window is the one it belongs to and
+-- g:actual_curwin the one with the cursor (g:statusline_winid is set only for %!).
 function PiMarkdownBar()
-  local doc = document_window()
-  local buf = doc and vim.api.nvim_win_get_buf(doc) or vim.api.nvim_get_current_buf()
+  local docs, win = document_windows(), vim.api.nvim_get_current_win()
+  if not vim.tbl_contains(docs, win) then
+    if #docs > 1 then return '%#StatusLineNC# Writing view: a Panels tab opens in the side with the cursor' end
+    win = docs[1]
+  end
+  local buf = win and vim.api.nvim_win_get_buf(win) or vim.api.nvim_get_current_buf()
+  local focused = #docs < 2 or win == tonumber(vim.g.actual_curwin)
   local name = vim.api.nvim_buf_get_name(buf)
   local notes = {}
   if not ok then table.insert(notes, 'Renderer missing: scripts/install-markdown-editor.sh') end
@@ -142,7 +156,7 @@ function PiMarkdownBar()
   if vim.bo[buf].modified and vim.b[buf].pi_note then table.insert(notes, vim.b[buf].pi_note) end
   if #notes > 0 then return '%#WarningMsg# ' .. table.concat(notes, ' · '):gsub('%%', '%%%%') end
   local shown = name == '' and '[No Name]' or vim.fn.fnamemodify(name, ':~')
-  return '%#StatusLine# %<' .. shown:gsub('%%', '%%%%') .. (vim.bo[buf].modified and ' [+] unsaved' or '') .. ' '
+  return (focused and '%#StatusLine#' or '%#StatusLineNC#') .. ' %<' .. shown:gsub('%%', '%%%%') .. (vim.bo[buf].modified and ' [+] unsaved' or '') .. ' '
 end
 
 local function fit_help()
@@ -165,13 +179,18 @@ local function show_help()
   end
   fit_help()
 end
+-- Two documents side by side each need a bar beneath them; with one, the index's status line is its bar.
+vim.o.statusline = '%{%v:lua.PiMarkdownBar()%}'
+local function arrange() vim.o.laststatus = #document_windows() > 1 and 2 or 0 end
+vim.api.nvim_create_autocmd({ 'WinNew', 'WinClosed' }, { callback = function() vim.schedule(arrange) end })
 vim.api.nvim_create_autocmd('VimEnter', { callback = show_help })
 vim.api.nvim_create_autocmd({ 'VimResized', 'WinResized' }, { callback = fit_help })
 vim.api.nvim_create_autocmd({ 'BufModifiedSet', 'BufEnter', 'BufWritePost' }, { command = 'redrawstatus!' })
 vim.api.nvim_create_autocmd('WinEnter', {
   callback = function()
     if vim.api.nvim_get_current_win() ~= help_win then return end
-    local doc = document_window()
+    local came = vim.fn.win_getid(vim.fn.winnr('#'))
+    local doc = vim.tbl_contains(document_windows(), came) and came or document_window()
     if doc then vim.schedule(function() pcall(vim.api.nvim_set_current_win, doc) end) end
   end,
 })
@@ -211,12 +230,15 @@ local function correct_removed()
   end
 end
 
--- A clean buffer reloads changes from disk; a modified one is left alone.
+-- A clean buffer on screen (either side of the writing view) reloads changes from disk; a modified one
+-- is left alone.
 vim.uv.new_timer():start(1000, 1000, vim.schedule_wrap(function()
   correct_removed()
-  local buf = vim.api.nvim_get_current_buf()
-  if file_buffer(buf) and not vim.bo[buf].modified and vim.fn.mode(1) == 'n' then
-    vim.cmd.checktime(buf)
+  for _, win in ipairs(document_windows()) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if file_buffer(buf) and not vim.bo[buf].modified and vim.fn.mode(1) == 'n' then
+      vim.cmd.checktime(buf)
+    end
   end
   if vim.v.vim_did_enter == 1 then show_help() end
   vim.cmd('redrawstatus!')  -- the bar is the index window's status line, not the current window's
@@ -225,13 +247,44 @@ end))
 -- Remote calls from the Pi extension; paths arrive hex-encoded to avoid quoting.
 local function decode(hex) return (hex:gsub('%x%x', function(h) return string.char(tonumber(h, 16)) end)) end
 
+local function same_file(buf, path)
+  local name = vim.api.nvim_buf_get_name(buf)
+  return name ~= '' and (vim.uv.fs_realpath(name) or name) == (vim.uv.fs_realpath(path) or path)
+end
+-- The listed buffer for `path`, added without loading it if there is none.
+local function buffer_for(path)
+  vim.cmd.badd(vim.fn.fnameescape(path))
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.bo[buf].buflisted and same_file(buf, path) then return buf end
+  end
+end
+local function shown_in(path)
+  for _, win in ipairs(document_windows()) do
+    if same_file(vim.api.nvim_win_get_buf(win), path) then return win end
+  end
+end
+
 -- An agent change does not take the view from a buffer with unsaved text: the document is loaded
 -- behind it and noted. An explicit choice (a Panels tab, /edit, /panels) switches; the buffer left
--- keeps its unsaved text.
+-- keeps its unsaved text. Either way, the document with the cursor is the one replaced, and one
+-- already on screen (the other side of the writing view) is left where it is. `explicit` 2 is a choice
+-- in the writing view: a document on screen gets the cursor, and with only one side open it opens beside.
 function PiMarkdownOpen(hex, explicit)
-  local path, buf = decode(hex), vim.api.nvim_get_current_buf()
-  if vim.api.nvim_buf_get_name(buf) == path then return 'current' end
-  if vim.bo[buf].modified and explicit ~= 1 then
+  local path = decode(hex)
+  local doc = document_window()
+  if doc and vim.api.nvim_get_current_win() ~= doc then vim.api.nvim_set_current_win(doc) end
+  local buf = vim.api.nvim_get_current_buf()
+  local there = shown_in(path)
+  if there then
+    if explicit ~= 2 or there == doc then return 'current' end
+    vim.api.nvim_set_current_win(there)
+    return 'focused'
+  end
+  if explicit == 2 and #document_windows() == 1 then
+    vim.api.nvim_open_win(buffer_for(path), true, { split = 'right', win = doc })
+    return 'opened'
+  end
+  if vim.bo[buf].modified and explicit ~= 1 and explicit ~= 2 then
     vim.cmd.badd(vim.fn.fnameescape(path))
     local here = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ':h')
     vim.b[buf].pi_note = 'Also requested: ' .. vim.fn.fnamemodify(path, vim.fn.fnamemodify(path, ':h') == here and ':t' or ':~')
@@ -248,8 +301,7 @@ function PiMarkdownCloseDoc(hex, how)
   local path = decode(hex)
   local target
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    local name = vim.api.nvim_buf_get_name(buf)
-    if name ~= '' and (vim.uv.fs_realpath(name) or name) == path then target = buf end
+    if same_file(buf, path) then target = buf end
   end
   if not target then return 'Closed ' .. vim.fn.fnamemodify(path, ':t') end
   return close_document(target, how)
@@ -276,7 +328,19 @@ function close_document(target, how)
   local others = vim.tbl_filter(function(buf)
     return buf ~= target and vim.bo[buf].buflisted and vim.api.nvim_buf_get_name(buf) ~= ''
   end, vim.api.nvim_list_bufs())
-  if vim.api.nvim_get_current_buf() == target and #others > 0 then vim.api.nvim_set_current_buf(others[1]) end
+  -- Each window showing it takes another document not on screen; when there is none, a second side
+  -- closes rather than repeat the other's document. Deleting a buffer on screen would close its window.
+  if #others > 0 then
+    for _, win in ipairs(document_windows()) do
+      if vim.api.nvim_win_get_buf(win) == target then
+        local on_screen = vim.tbl_map(vim.api.nvim_win_get_buf, document_windows())
+        local spare = vim.tbl_filter(function(buf) return not vim.tbl_contains(on_screen, buf) end, others)[1]
+        if spare then vim.api.nvim_win_set_buf(win, spare)
+        elseif #document_windows() > 1 then vim.api.nvim_win_close(win, true)
+        else vim.api.nvim_win_set_buf(win, others[1]) end
+      end
+    end
+  end
   vim.api.nvim_buf_delete(target, { force = how == 'discard' })
   if #others == 0 then vim.schedule(function() pcall(vim.cmd, 'qall') end) end
   return done .. short
@@ -297,7 +361,47 @@ function PiMarkdownState()
     local name = vim.api.nvim_buf_get_name(buf)
     if name ~= '' then table.insert(files, name) end
   end
-  return vim.fn.json_encode({ current = vim.fn.expand('%:p'), unsaved = files, modified = #unsaved })
+  local shown = {}
+  for _, win in ipairs(document_windows()) do
+    local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))
+    if name ~= '' then table.insert(shown, name) end
+  end
+  local doc = document_window()
+  local current = doc and vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(doc)) or ''
+  return vim.fn.json_encode({ current = current ~= '' and vim.fn.fnamemodify(current, ':p') or '', shown = shown,
+    unsaved = files, modified = #unsaved })
+end
+
+-- The writing view (scripts/lib/diff-pane.ts, setWriting): two documents side by side, the cursor staying
+-- on the current one. The other side shows the document shown before it, else `hex` (another of Pi's
+-- documents, or empty), else the same document. Only windows change: every buffer keeps its text.
+function PiMarkdownWrite(hex)
+  local docs = document_windows()
+  if #docs ~= 1 then return #docs > 1 and 'already' or 'no document' end
+  local doc, current = docs[1], vim.api.nvim_win_get_buf(docs[1])
+  local other = vim.fn.bufnr('#')
+  if not (other > 0 and other ~= current and vim.bo[other].buflisted and file_buffer(other)) then
+    local fallback = hex ~= '' and decode(hex) or ''
+    if fallback ~= '' and not same_file(current, fallback) then
+      other = buffer_for(fallback)
+    else
+      other = current
+    end
+  end
+  vim.api.nvim_open_win(other, false, { split = 'right', win = doc })
+  arrange()
+  return 'writing'
+end
+
+-- Back to one document: the side with the cursor stays, the other window closes. Its buffer, saved or
+-- not, stays loaded behind it ('hidden'), as any document left by a tab click does.
+function PiMarkdownSingle()
+  local keep = document_window()
+  for _, win in ipairs(document_windows()) do
+    if win ~= keep then vim.api.nvim_win_close(win, false) end
+  end
+  arrange()
+  return 'single'
 end
 
 function PiMarkdownQuit()

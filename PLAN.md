@@ -10,7 +10,7 @@ Pi extensions, session navigation, automatic diffs, editable Markdown, quality f
 
 - Verify local-to-cloud task handoff, result retrieval and scheduled execution as complete workflows.
 - Exercise phone editing and navigation on a physical device, including keyboard behaviour.
-- Evaluate a writing layout with two documents visible and the agent temporarily hidden.
+- Use the implemented two-document writing view in daily work; Pi continues running while hidden.
 - Rehearse installation on a clean computer and account using the tracked [requirements](REQUIREMENTS.md).
 
 Implementation details belong with the code and setup instructions. These directions are not promises of supported functionality.

@@ -175,3 +175,36 @@ test('a removed document closes unless it has unsaved text; the last one closes 
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });  // Neovim may still be writing state as it exits
   }
 });
+
+test('writing view: the clean side without the cursor follows its file; closing a side\'s document with none spare closes that side', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'markdown-editor-'));
+  const left = join(dir, 'left.md'), right = join(dir, 'right.md');
+  writeFileSync(left, '# Left\n');
+  writeFileSync(right, '# Right\n');
+  const e = editor(dir, dir, [left]);
+  const hex = file => Buffer.from(file).toString('hex');
+  const sides = () => JSON.parse(e.remote("json_encode(map(filter(getwininfo(), 'getwinvar(v:val.winid, \"&winfixbuf\") == 0'), 'fnamemodify(bufname(v:val.bufnr), \":t\")'))"));
+  try {
+    await until(() => e.screen().includes('# Left'), 'the editor is up');
+    assert.equal(e.remote(`v:lua.PiMarkdownWrite('${hex(right)}')`), 'writing');
+    assert.deepEqual(sides(), ['left.md', 'right.md']);
+    assert.equal(e.remote("expand('%:t')"), 'left.md', 'the cursor stays on the current document');
+    assert.equal(e.remote('&laststatus'), '2', 'each side has its bar');
+    await sleep(1200);
+    writeFileSync(right, '# Right\n\nrewritten on disk\n');
+    await until(() => e.screen().includes('rewritten on disk'), 'the clean side without the cursor reloads');
+
+    // Only two documents: closing the right one leaves no spare, so its side closes.
+    assert.match(e.remote(`v:lua.PiMarkdownCloseDoc('${hex(right)}', 'close')`), /^Closed right\.md/);
+    await until(() => sides().length === 1, 'one side left');
+    assert.deepEqual(sides(), ['left.md']);
+    await until(() => e.remote('&laststatus') === '0', 'the bar is the index\'s line again');
+    assert.equal(e.remote(`v:lua.PiMarkdownWrite('')`), 'writing', 'with no other document, both sides show it');
+    assert.deepEqual(sides(), ['left.md', 'left.md']);
+    assert.equal(e.remote('v:lua.PiMarkdownSingle()'), 'single');
+    assert.deepEqual(sides(), ['left.md']);
+  } finally {
+    e.stop();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});

@@ -5,6 +5,7 @@
 //   tmux-tabs.mjs dx%P:ID <client>      close that document (unsaved text asks first)
 //   tmux-tabs.mjs close-file %P <hex path> save|discard <client>   from a document's close menu
 //   tmux-tabs.mjs w@N <client>          close window @N after a menu confirms it
+//   tmux-tabs.mjs wv%P <client>         turn Pi %P's writing view on or off (two documents, Pi unseen)
 //   tmux-tabs.mjs refresh <owner> [gone]  redraw that Pi's Panels row, leaving out an exiting pane
 //   tmux-tabs.mjs refresh-pane %N [gone]  the same for the Pi that owns preview %N now; `gone` leaves %N out
 //   tmux-tabs.mjs close-doc %N save|discard <client>   from the editor's close menu
@@ -17,7 +18,7 @@ import { basename } from 'node:path';
 import {
   DIFF_OWNER, DOC_OWNER, PI_WINDOW, TABS, allPanes,
   bringBeside, closeDocument, docId, docServer, documents, dropSidebarOnly, editorState, findExecutable, layoutOf, paneExists, releaseOrphans,
-  remoteExpr, renderPanels, selectDocument, tmux,
+  remoteExpr, renderPanels, selectDocument, setWriting, tmux,
 } from './lib/diff-pane.ts';
 
 const nvim = findExecutable('nvim');
@@ -142,9 +143,15 @@ async function documentAt(range) {
 async function selectDoc(range, client) {
   const { owner, file } = await documentAt(range);
   if (!file) return;
-  const { warning } = await selectDocument(owner, file, { nvim });
-  await showWindow(client, (await layoutOf(owner)).window);
+  const { window, warning } = await selectDocument(owner, file, { nvim });
+  await showWindow(client, window);
   if (warning) await notice(client, warning);
+}
+
+async function toggleWriting(owner, client) {
+  const { window, message, warning } = await setWriting(owner, undefined, { nvim });
+  if (window) await showWindow(client, window);
+  if (message || warning) await notice(client, message ?? warning);
 }
 
 // A document with unsaved text in the editor, or an editor that does not answer, asks first; any
@@ -177,6 +184,7 @@ const client = { 'close-doc': process.argv[5], 'close-file': process.argv[6], 'k
 try {
   if (action?.startsWith('ps%')) await select(action.slice(2), target);
   else if (action?.startsWith('px%')) await close(action.slice(2), target);
+  else if (action?.startsWith('wv%')) await toggleWriting(action.slice(2), target);
   else if (action?.startsWith('w@')) await confirmWindow(action.slice(1), target);
   else if (action?.startsWith('ds%')) await selectDoc(action.slice(2), target);
   else if (action?.startsWith('dx%')) await closeDocTab(action.slice(2), target);

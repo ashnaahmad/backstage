@@ -25,6 +25,7 @@ const SESSION = '@pi_session';                     // pane option on Pi and its 
 const PI_PID = '@pi_pid';                          // pane option on Pi: its process and the pane's, to tell a live Pi from a dead one;
 const LEFT = 'left';                               // then this mark once that Pi has released its previews on leaving
 export const PREVIEW_WINDOW = '@pi_preview_window'; // window option: a waiting preview, left out of the Windows row
+const WRITING = '@pi_writing';                      // pane option on an editor in the writing view (setWriting)
 export const TABS = fileURLToPath(new URL('../tmux-tabs.mjs', import.meta.url));
 const READ_ONLY = new Set(['read', 'grep', 'find', 'ls']);
 const MARKDOWN = /\.(md|markdown)$/i;
@@ -159,11 +160,12 @@ export const paneExists = async pane => (await tmux('display-message', '-p', '-t
  * `name` is what /panel accepts; `label` names a parked window.
  */
 async function ownedPreviews(owner) {
-  const format = ['#{pane_id}', '#{window_id}', '#{window_index}', '#{pane_active}', `#{${DIFF_OWNER}}`, `#{${DOC_OWNER}}`, `#{${DIFF_ROOT}}`, '#{pane_current_path}'].join('\t');
+  const format = ['#{pane_id}', '#{window_id}', '#{window_index}', '#{pane_active}', `#{${DIFF_OWNER}}`, `#{${DOC_OWNER}}`, `#{${DIFF_ROOT}}`,
+    '#{pane_current_path}', `#{${WRITING}}`].join('\t');
   const rows = await allPanes(format);
   const previews = [];
-  for (const [id, window, index, active, diff, doc, tagged, cwd] of rows) {
-    if (doc === owner) previews.push({ id, window, index, active: active === '1', key: 'doc', name: 'edit', label: 'edit' });
+  for (const [id, window, index, active, diff, doc, tagged, cwd, writing] of rows) {
+    if (doc === owner) previews.push({ id, window, index, active: active === '1', key: 'doc', name: 'edit', label: 'edit', writing: writing === '1' });
     if (diff !== owner) continue;
     // A Hunk pane from before root tags shows the repository it was started in.
     const root = tagged || await repoRoot(cwd) || cwd;
@@ -191,8 +193,9 @@ export async function layoutOf(owner) {
 }
 
 // Swapping keeps the slot's size and the parked window; the window is renamed after its new preview.
+// An editor in the writing view stays in its own window until the view is turned off (setWriting).
 export async function bringBeside(owner, preview, visible) {
-  if (preview.id === visible?.id) return;
+  if (preview.id === visible?.id || preview.writing) return;
   if (visible) {
     await tmux('swap-pane', '-d', '-s', preview.id, '-t', visible.id);
     await tmux('rename-window', '-t', visible.id, visible.label);
@@ -443,14 +446,16 @@ const piRuns = async window => (await tmux('list-panes', '-t', window, '-F', `#{
 
 /**
  * The editor's own account of itself (PiMarkdownState in nvim/pi-markdown/init.lua), the one source for
- * whether it holds unsaved text: its current file, its unsaved files, and `modified`, how many buffers
- * hold unsaved text, typed text in an unnamed buffer included. Undefined when the editor does not answer.
+ * whether it holds unsaved text: its current file (the side with the cursor), the files on screen, its
+ * unsaved files, and `modified`, how many buffers hold unsaved text, typed text in an unnamed buffer
+ * included. Undefined when the editor does not answer.
  */
 export async function editorState(nvim, pane) {
   const reply = await remoteExpr(nvim, await docServer(pane), 'v:lua.PiMarkdownState()').catch(() => undefined);
   if (!reply) return undefined;
-  const { current, unsaved, modified } = JSON.parse(reply);
-  return { current: current && canonical(current), unsaved: new Set(unsaved.map(canonical)), modified };
+  const { current, shown, unsaved, modified } = JSON.parse(reply);
+  return { current: current && canonical(current), shown: new Set((shown ?? [current]).filter(Boolean).map(canonical)),
+    unsaved: new Set(unsaved.map(canonical)), modified };
 }
 
 // Document operations: each holds the lock for its whole change and redraws the Panels row before
@@ -477,20 +482,72 @@ export const NOT_REDRAWN = 'Document updated, but the Panels bar could not refre
 /**
  * An explicit choice (a Panels tab, /edit, /panels): shows `file` in this Pi's editor beside Pi, adding it
  * to the documents. Switches buffers in the open editor (Neovim keeps unsaved text in the buffer left
- * behind), or starts the editor when none is open. Returns `{ warning }` (see `changing`).
+ * behind), or starts the editor when none is open. In the writing view the document replaces the one in
+ * the side with the cursor, or gets the cursor if either side shows it already, and the view stays.
+ * Returns `{ window, warning }`: the window showing it, and see `changing`.
  */
 export function selectDocument(owner, file, { nvim = findExecutable('nvim') } = {}) {
   return changing(owner, nvim, async () => {
     await addDocuments(owner, [file]);
     let place = await layoutOf(owner);
     let editor = place.previews.find(preview => preview.key === 'doc');
-    if (editor) await remoteExpr(nvim, await docServer(editor.id), `v:lua.PiMarkdownOpen('${hex(file)}', 1)`);
+    if (editor) await remoteExpr(nvim, await docServer(editor.id), `v:lua.PiMarkdownOpen('${hex(file)}', ${editor.writing ? 2 : 1})`);
     else {
       const id = await startEditor(owner, place, file, nvim);
       place = await layoutOf(owner);
       editor = place.previews.find(preview => preview.id === id);
     }
     if (editor) await bringBeside(owner, editor, place.visible);
+    return { window: editor?.writing ? editor.window : place.window };
+  });
+}
+
+// A newly started editor answers once Neovim is listening.
+async function answering(nvim, pane) {
+  for (const end = Date.now() + 5000; Date.now() < end; await new Promise(done => setTimeout(done, 100))) {
+    if (await remoteExpr(nvim, await docServer(pane), '1').then(() => true, () => false)) return true;
+  }
+  return false;
+}
+
+/**
+ * The writing view: Pi's editor in its own window, two documents side by side (PiMarkdownWrite), while Pi
+ * keeps running, unseen, in its window. `on` true turns it on, false off, undefined toggles, decided under
+ * the lock. On: starts the editor on Pi's first document if none is open; Pi with no documents has
+ * nothing to write in. Off: back to one document, the side with the cursor, beside Pi; the other keeps
+ * its text behind it. Only this and Pi quitting end it: nothing else moves the editor (bringBeside), so
+ * document choices meanwhile open in the writing view. Returns `{ window, message, warning }`: the
+ * window to show, and why nothing changed.
+ */
+export function setWriting(owner, on, { nvim = findExecutable('nvim') } = {}) {
+  return changing(owner, nvim, async () => {
+    const place = await layoutOf(owner);
+    let editor = place.previews.find(preview => preview.key === 'doc');
+    if (!(on ?? !editor?.writing)) {
+      if (!editor) return { window: place.window };
+      // The view ends once the editor is beside Pi: a failed move leaves it whole, to try again. An editor
+      // that does not answer keeps its sides.
+      await bringBeside(owner, { ...editor, writing: false }, place.visible);
+      await remoteExpr(nvim, await docServer(editor.id), 'v:lua.PiMarkdownSingle()').catch(() => {});
+      await tmux('set-option', '-pu', '-t', editor.id, WRITING);
+      return { window: place.window };
+    }
+    if (editor?.writing) return { window: editor.window };
+    const files = (await documents(owner)).filter(file => existsSync(file));
+    if (!editor) {
+      if (!files.length) return { message: 'No document to write in: open one with /edit or /panels.' };
+      const id = await startEditor(owner, place, files[0], nvim);
+      editor = (await layoutOf(owner)).previews.find(preview => preview.id === id);
+      if (!editor || !await answering(nvim, id)) return { message: 'The editor did not start; try again.' };
+    }
+    const current = (await editorState(nvim, editor.id))?.current;
+    const other = files.find(file => file !== current) ?? '';
+    const reply = await remoteExpr(nvim, await docServer(editor.id), `v:lua.PiMarkdownWrite('${hex(other)}')`);
+    if (reply !== 'writing' && reply !== 'already') return { message: 'The editor has no document to write in.' };
+    if (editor.window === place.window) await tmux('break-pane', '-d', '-a', '-s', editor.id, '-t', place.window, '-n', 'write');
+    else await tmux('rename-window', '-t', editor.id, 'write');
+    await tmux('set-option', '-p', '-t', editor.id, WRITING, '1');
+    return { window: (await tmux('display-message', '-p', '-t', editor.id, '#{window_id}')).trim() };
   });
 }
 
@@ -562,11 +619,16 @@ async function drawPanels(owner, { nvim, gone }) {
     .map(preview => tab(`ps${preview.id}`, `px${preview.id}`, `Diff: ${preview.name}`, preview === visible));
   const editor = shown.find(preview => preview.key === 'doc');
   const state = editor && nvim ? await editorState(nvim, editor.id) : undefined;
-  for (const file of await documents(owner)) {
+  const docs = await documents(owner);
+  for (const file of docs) {
     // A removed file has no tab, unless the editor still holds its unsaved text; it returns if recreated.
     if (!state?.unsaved.has(file) && !existsSync(file)) continue;
     const name = `${basename(file)}${state?.unsaved.has(file) ? ' ●' : ''}`;
-    tabs.push(tab(`ds${owner}:${docId(file)}`, `dx${owner}:${docId(file)}`, name, editor === visible && state?.current === file));
+    tabs.push(tab(`ds${owner}:${docId(file)}`, `dx${owner}:${docId(file)}`, name, (editor === visible || editor?.writing) && state?.shown.has(file)));
+  }
+  // The writing view's switch (setWriting), first, once there is a document to write in.
+  if (editor || docs.length) {
+    tabs.unshift(`#[range=user|wv${owner}]${editor?.writing ? '#[reverse] π Show agent #[noreverse]' : ' ✎ Write '}#[norange]`);
   }
   const row = tabs.join('  ');
   for (const pane of [owner, ...shown.map(preview => preview.id)]) await tmux('set-option', '-p', '-t', pane, PANELS, row).catch(() => {});
@@ -711,7 +773,7 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
     const { previews, visible } = await layout();
     const target = previews.find(preview => preview.id === panes.find(Boolean));
     const loaded = docs.length > 0;
-    if (!target || target.id === visible?.id) return { loaded };
+    if (!target || target.id === visible?.id || target.writing) return { loaded };
     if (await busy(visible)) return { notice: `${target.label} changed; /panel ${target.name} shows it`, loaded };
     await bring(target, visible);
     return { loaded };
@@ -936,6 +998,7 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
           : previews[(previews.indexOf(visible) + 1) % previews.length];
         // The named preview may have closed since it was looked up.
         if (!target) return `No preview named ${name}. Open previews: ${names}`;
+        if (target.writing) return 'The editor is in the writing view; its Panels tab π Show agent brings it back beside Pi.';
         await bring(target, visible);
         await render();
         return `Showing ${target.label}. Open: ${names}`;
@@ -1021,10 +1084,12 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
         // Pi quits the same way when a signal stops it (tmux closing its pane sends SIGHUP): that is not a
         // deliberate close, so the previews stay for a resume (releaseOrphans).
         if (signalled() || !await paneExists(owner)) return releaseOrphans({ leaving: { pane: owner, pid: process.pid } });
-        // A parked editor comes beside Pi first, so unsaved text is not left in a hidden window.
+        // A parked editor comes beside Pi first, so unsaved text is not left in a hidden window; one in the
+        // writing view leaves it.
         const first = await layout();
         const doc = first.previews.find(preview => preview.key === 'doc');
-        if (doc) await bring(doc, first.visible);
+        if (doc?.writing) await setWriting(owner, false, { nvim }).catch(() => {});
+        else if (doc) await bring(doc, first.visible).catch(() => {});
         const { previews } = await layout();
         for (const preview of previews.filter(preview => preview.key !== 'doc')) {
           await tmux('kill-pane', '-t', preview.id).catch(() => {});
@@ -1038,8 +1103,13 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
           }
           await tmux('set-option', '-pu', '-t', owner, DOCS).catch(() => {});
         }).catch(() => {});
-        // Pi is leaving: an editor kept for unsaved text stands alone, with no row pointing at this Pi.
+        // Pi is leaving: an editor kept for unsaved text stands alone, with no row pointing at this Pi, and
+        // one that could not come beside Pi is an ordinary window, listed in the Windows row.
         for (const pane of [owner, ...previews.map(preview => preview.id)]) await tmux('set-option', '-pu', '-t', pane, PANELS).catch(() => {});
+        for (const { window } of (await layout().catch(() => ({ previews: [] }))).previews.filter(preview => preview.window !== first.window)) {
+          await tmux('set-option', '-wu', '-t', window, PREVIEW_WINDOW).catch(() => {});
+          await tmux('set-option', '-wu', '-t', window, PANELS).catch(() => {});
+        }
         await tmux('set-option', '-pu', '-t', owner, PI_OWNER).catch(() => {});
         await tmux('set-option', '-wu', '-t', owner, PANELS).catch(() => {});
         await tmux('set-option', '-wu', '-t', owner, PI_WINDOW).catch(() => {});

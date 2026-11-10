@@ -617,6 +617,32 @@ installed, the bottom of the terminal has two labelled rows:
   document closes the editor. Repositories without changes
   have no tab.
 
+**Writing view.** `✎ Write`, first in the Panels row once Pi has a document,
+moves Pi's editor into its own `write` window with two
+documents side by side: the current one, with the cursor,
+and the one shown before it (else Pi's next document). Pi
+keeps running in its window, unseen; Ctrl+Q adds a sidebar
+to the writing window, the third panel. A document tab then
+fills the side with the cursor, or puts the cursor on the
+side already showing it; each side has its own bar beneath
+it. The document a side leaves keeps its unsaved text, and
+closing a document on screen fills its side with one that
+is not, or closes that side. Agent changes add tabs as
+usual but never take the editor out of the writing view,
+nor does `/panel`. `π Show agent` (the same place) returns
+the editor beside Pi with the side that had the cursor; Pi
+quitting does the same before its unsaved check. It is one
+Neovim, so unsaved text, saving and closing behave as above.
+After updating, run `tmux source-file ~/.tmux.conf` so the
+click reaches it, and `/reload` each running Pi: until then
+its agent changes may still move the editor out of the
+writing view. An editor started before then reports a failed
+tab action, before anything moves: close it with `q` and
+reopen a document from its tab. A new tmux server and new
+Pi sessions load the change themselves. Tests: the `writing view`
+tests in `scripts/tests/diff-pane.test.mjs` and
+`scripts/tests/markdown-editor.test.mjs`.
+
 Install by adding one line to `~/.tmux.conf`, with this
 checkout's path on that machine, then
 `tmux source-file ~/.tmux.conf` (running sessions stay):

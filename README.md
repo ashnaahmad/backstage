@@ -27,6 +27,7 @@ Clone this repository, then follow [SETUP.md](SETUP.md). Setup is explicit: inst
 | `/panels` | Choose a repository diff or document |
 | `/panel path/to/file.md` | Show a document directly |
 | Bottom Panels tabs | Switch or close open documents and diffs |
+| `✎ Write` / `π Show agent` | Show two editable documents side by side while Pi keeps running, then return to the agent view. Document tabs use the focused side |
 | Ctrl+Q | Hide or restore the session sidebar |
 | Editor `i`, Esc, `w`, `q` | Type, stop typing, save, close |
 | `/quality` | Inspect quality progress and review results |
