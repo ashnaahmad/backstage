@@ -771,9 +771,9 @@ and with the editor in every other panel (each is its own
 Neovim): `y` copies, `dd` (or `d`/`c` with a motion) cuts,
 and `p` pastes from it. The delete key, `x` and typing over
 a selection only delete. The mouse belongs to Neovim, so
-the terminal's Cmd-C and right-click Copy find no selection
-(Terminal.app's Copy once replaced the clipboard with a
-space, so skip it). Outside
+the terminal's Cmd-C and right-click Copy find no selection;
+Terminal.app's right-click Copy replaces the clipboard with
+the word under the pointer, so skip it. Outside
 typing, a mouse selection (drag, double or triple click) is
 copied on release. While typing, a selection is not copied,
 so pasting over it inserts what was copied elsewhere.
