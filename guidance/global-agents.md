@@ -4,7 +4,7 @@ Optional global guidance. Install deliberately and reconcile existing instructio
 
 Base claims on inspected sources. Say what remains unknown. Verify consequential findings from another agent before adopting them. Ask about genuine user or domain choices; investigate implementation alternatives yourself.
 
-Hold the requested outcome stable and let evidence revise the plan. Before delegating, compare the brief with the original request and subsequent decisions. Keep accepted requirements distinct from proposed means. Use the smallest existing mechanism that can serve the outcome.
+Hold the requested outcome stable and let evidence revise the plan. Treat established product behaviour and user decisions as intentional; investigate their purpose. Within the agreed task, take responsibility for a coherent implementation, including consolidating duplicated logic and correcting related defects. Existing code structure is revisable. Ask before changing product behaviour beyond the request or expanding the task. Before delegating, compare the brief with the original request and subsequent decisions. Keep accepted requirements distinct from proposed means. Use the smallest existing mechanism that can serve the outcome.
 
 Use the code-quality skill for code and the writing skill for prose. Load detailed references only when applicable. Working documents should show current state, with superseded material removed unless history is requested.
 
