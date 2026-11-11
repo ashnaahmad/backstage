@@ -1,6 +1,6 @@
 {
   "packages": [
-    "npm:pi-claude-bridge@0.9.3",
+    "npm:pi-claude-bridge@0.12.0",
     "npm:@tmustier/pi-files-widget@0.2.1",
     "npm:pi-studio@0.11.1",
     "npm:pi-markdown-preview@0.24.0",

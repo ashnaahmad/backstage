@@ -15,7 +15,7 @@ Install Claude Code using its supported installer and sign in with the account i
 Install the pinned packages globally (omit `-l`):
 
 ```sh
-pi install npm:pi-claude-bridge@0.9.3
+pi install npm:pi-claude-bridge@0.12.0
 pi install npm:@tmustier/pi-files-widget@0.2.1
 pi install npm:pi-studio@0.11.1
 pi install npm:pi-markdown-preview@0.24.0
@@ -23,6 +23,9 @@ pi install npm:pi-secrets@0.1.1
 brew install bat git-delta glow pandoc hunk neovim
 scripts/install-markdown-editor.sh
 ```
+
+Claude bridge 0.12.0 requires Pi 1.5.1 or newer. It registers
+Fable 5.2 with 1M context.
 
 Install Chrome or another renderer-supported Chromium browser for image previews. PDF/LaTeX and Studio's optional Quarto/REPL dependencies are outside the current setup. Restart Pi or `/reload`; accept project trust only after reviewing the checkout.
 
