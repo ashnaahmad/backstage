@@ -176,7 +176,7 @@ test('a removed document closes unless it has unsaved text; the last one closes 
   }
 });
 
-test('writing view: the clean side without the cursor follows its file; closing a side\'s document with none spare closes that side', async () => {
+test('writing view: Write keeps the editor as it is; the clean side without the cursor follows its file; closing a side\'s document with none spare closes that side', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'markdown-editor-'));
   const left = join(dir, 'left.md'), right = join(dir, 'right.md');
   writeFileSync(left, '# Left\n');
@@ -186,9 +186,14 @@ test('writing view: the clean side without the cursor follows its file; closing 
   const sides = () => JSON.parse(e.remote("json_encode(map(filter(getwininfo(), 'getwinvar(v:val.winid, \"&winfixbuf\") == 0'), 'fnamemodify(bufname(v:val.bufnr), \":t\")'))"));
   try {
     await until(() => e.screen().includes('# Left'), 'the editor is up');
-    assert.equal(e.remote(`v:lua.PiMarkdownWrite('${hex(right)}')`), 'writing');
-    assert.deepEqual(sides(), ['right.md', 'left.md'], 'the current document stays on the right');
-    assert.equal(e.remote("expand('%:t')"), 'left.md', 'with the cursor');
+    e.remote(`execute('badd ${right}')`);  // another document, held behind
+    assert.equal(e.remote('v:lua.PiMarkdownWrite()'), 'writing');
+    assert.deepEqual(sides(), ['left.md'], 'Write adds no side, though another document is there');
+    assert.equal(e.remote('&laststatus'), '0', 'the bar stays above the one document');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(right)}', '')`), 'writing');
+    assert.deepEqual(sides(), ['right.md', 'left.md'], 'Open on left adds the second; the current document stays on the right');
+    assert.equal(e.remote("expand('%:t')"), 'right.md', 'with the cursor on the left');
+    e.remote("execute('wincmd l')");
     assert.equal(e.remote('&laststatus'), '2', 'each side has its bar');
     await sleep(1200);
     writeFileSync(right, '# Right\n\nrewritten on disk\n');
@@ -197,15 +202,15 @@ test('writing view: the clean side without the cursor follows its file; closing 
     await until(() => e.remote("expand('%:t')") === 'right.md', 'a click moves the cursor there');
     assert.equal(e.remote('v:lua.PiMarkdownSingle()'), 'single');
     assert.deepEqual(sides(), ['left.md'], 'back to one document: the right side\'s, wherever the cursor was');
-    assert.equal(e.remote(`v:lua.PiMarkdownWrite('${hex(right)}')`), 'writing');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(right)}', '')`), 'writing');
 
     // Only two documents: closing the right one leaves no spare, so its side closes.
     assert.match(e.remote(`v:lua.PiMarkdownCloseDoc('${hex(right)}', 'close')`), /^Closed right\.md/);
     await until(() => sides().length === 1, 'one side left');
     assert.deepEqual(sides(), ['left.md']);
     await until(() => e.remote('&laststatus') === '0', 'the bar is the index\'s line again');
-    assert.equal(e.remote(`v:lua.PiMarkdownWrite('')`), 'writing', 'with no other document, both sides show it');
-    assert.deepEqual(sides(), ['left.md', 'left.md']);
+    assert.equal(e.remote('v:lua.PiMarkdownWrite()'), 'writing', 'Write with the only document');
+    assert.deepEqual(sides(), ['left.md'], 'shows it once');
     assert.equal(e.remote('v:lua.PiMarkdownSingle()'), 'single');
     assert.deepEqual(sides(), ['left.md']);
   } finally {

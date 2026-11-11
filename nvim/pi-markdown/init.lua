@@ -277,7 +277,7 @@ end
 -- behind it and noted. An explicit choice (a Panels tab, /edit, /panels) switches; the buffer left
 -- keeps its unsaved text. Either way, the document with the cursor is the one replaced, and one
 -- already on screen (the other side of the writing view) is left where it is. `explicit` 2 is a choice
--- in the writing view: a document on screen gets the cursor, and with only one side open it opens on the left.
+-- in the writing view: a document on screen gets the cursor. Only Open on left (PiMarkdownOpenLeft) adds a side.
 function PiMarkdownOpen(hex, explicit)
   local path = decode(hex)
   local doc = document_window()
@@ -288,10 +288,6 @@ function PiMarkdownOpen(hex, explicit)
     if explicit ~= 2 or there == doc then return 'current' end
     vim.api.nvim_set_current_win(there)
     return 'focused'
-  end
-  if explicit == 2 and #document_windows() == 1 then
-    vim.api.nvim_open_win(buffer_for(path), true, { split = 'left', win = doc })
-    return 'opened'
   end
   if vim.bo[buf].modified and explicit ~= 1 and explicit ~= 2 then
     vim.cmd.badd(vim.fn.fnameescape(path))
@@ -375,14 +371,20 @@ function PiMarkdownState()
     local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))
     if name ~= '' then table.insert(shown, name) end
   end
+  -- Every file it holds, on screen or behind: each is one of Pi's documents (drawPanels).
+  local open = {}
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.bo[buf].buflisted and file_buffer(buf) then table.insert(open, vim.api.nvim_buf_get_name(buf)) end
+  end
   local doc = document_window()
   local current = doc and vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(doc)) or ''
   return vim.fn.json_encode({ current = current ~= '' and vim.fn.fnamemodify(current, ':p') or '', shown = shown,
-    unsaved = files, modified = #unsaved })
+    open = open, unsaved = files, modified = #unsaved })
 end
 
--- The writing view (scripts/lib/diff-pane.ts, setWriting): two documents side by side. The right is the
--- document that was beside Pi and stays there when Pi returns (PiMarkdownSingle); the left takes Pi's place.
+-- The writing view (scripts/lib/diff-pane.ts, setWriting): the editor without Pi beside it, with one
+-- document or two side by side. The right is the document that was beside Pi and stays there when Pi
+-- returns (PiMarkdownSingle); the left, when there is one, takes Pi's place.
 -- Only windows change: every buffer keeps its text.
 
 -- A document for the left side other than `current`: the one shown before it, else `hex` (another of Pi's
@@ -395,13 +397,10 @@ local function other_document(current, hex)
   return current
 end
 
--- The ✎ Write switch: another document on the left; the cursor stays on the right, where it was.
-function PiMarkdownWrite(hex)
-  local docs = document_windows()
-  if #docs ~= 1 then return #docs > 1 and 'already' or 'no document' end
-  vim.api.nvim_open_win(other_document(vim.api.nvim_win_get_buf(docs[1]), hex), false, { split = 'left', win = docs[1] })
-  arrange()
-  return 'writing'
+-- The ✎ Write switch: the editor as it is, now filling the screen; no side is added. A second document
+-- comes only from Open on left.
+function PiMarkdownWrite()
+  return #document_windows() > 0 and 'writing' or 'no document'
 end
 
 -- Open on left (a document tab's menu): `path` on the left, with the cursor, and the right side kept. Asked for

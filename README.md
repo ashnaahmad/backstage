@@ -27,7 +27,7 @@ Clone this repository, then follow [SETUP.md](SETUP.md). Setup is explicit: inst
 | `/panels` | Choose a repository diff or document |
 | `/panel path/to/file.md` | Show a document directly |
 | Bottom Panels tabs | Switch or close open documents and diffs |
-| `✎ Write` / `π Show agent` | Show two editable documents while Pi keeps running. Right-click a document tab → `Open on left`; returning to Pi keeps the right-hand document |
+| `✎ Write` (Panels row) | Writing view: Pi's editor fills the screen as it is while Pi keeps running unseen; right-click a document tab for `Open on left` to add a second document beside it; a document tab fills the side with the cursor; `π Show agent` returns, keeping the right side's document. See [setup](SETUP.md#terminal-session-sidebar-and-browser-qa) |
 | Ctrl+Q | Hide or restore the session sidebar |
 | Editor `i`, Esc, `w`, `q` | Type, stop typing, save, close |
 | `/quality` | Inspect quality progress and review results |

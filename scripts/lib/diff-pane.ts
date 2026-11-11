@@ -446,16 +446,16 @@ const piRuns = async window => (await tmux('list-panes', '-t', window, '-F', `#{
 
 /**
  * The editor's own account of itself (PiMarkdownState in nvim/pi-markdown/init.lua), the one source for
- * whether it holds unsaved text: its current file (the side with the cursor), the files on screen, its
- * unsaved files, and `modified`, how many buffers hold unsaved text, typed text in an unnamed buffer
+ * whether it holds unsaved text: its current file (the side with the cursor), the files on screen, every
+ * file it holds (`open`, undefined from an editor started before it was reported), its unsaved files, and `modified`, how many buffers hold unsaved text, typed text in an unnamed buffer
  * included. Undefined when the editor does not answer.
  */
 export async function editorState(nvim, pane) {
   const reply = await remoteExpr(nvim, await docServer(pane), 'v:lua.PiMarkdownState()').catch(() => undefined);
   if (!reply) return undefined;
-  const { current, shown, unsaved, modified } = JSON.parse(reply);
+  const { current, shown, open, unsaved, modified } = JSON.parse(reply);
   return { current: current && canonical(current), shown: new Set((shown ?? [current]).filter(Boolean).map(canonical)),
-    unsaved: new Set(unsaved.map(canonical)), modified };
+    open: open && new Set(open.map(canonical)), unsaved: new Set(unsaved.map(canonical)), modified };
 }
 
 // Document operations: each holds the lock for its whole change and redraws the Panels row before
@@ -511,9 +511,9 @@ async function answering(nvim, pane) {
 }
 
 /**
- * The writing view: Pi's editor in its own window, two documents side by side (PiMarkdownWrite), while Pi
- * keeps running, unseen, in its window. The right side is the document that was beside Pi and stays when
- * Pi returns; the left takes Pi's place. `on` true turns it on, false off, undefined toggles, decided under
+ * The writing view: Pi's editor in its own window, as it was beside Pi (PiMarkdownWrite adds no side), while
+ * Pi keeps running, unseen, in its window; Open on left (openOnLeft) puts a second document beside it. The
+ * right side is the document that was beside Pi and stays when Pi returns; the left takes Pi's place. `on` true turns it on, false off, undefined toggles, decided under
  * the lock. On: starts the editor on Pi's first document if none is open; Pi with no documents has
  * nothing to write in. Off: Pi back on the left, with the right side's document beside it; the left one
  * keeps its text behind it. Only this and Pi quitting end it: nothing else moves the editor (bringBeside), so
@@ -534,7 +534,11 @@ export function setWriting(owner, on, { nvim = findExecutable('nvim') } = {}) {
       return { window: place.window };
     }
     if (editor?.writing) return { window: editor.window };
-    return enterWriting(owner, place, editor, undefined, nvim, other => `v:lua.PiMarkdownWrite('${hex(other)}')`);
+    // An editor started before Write stopped adding a side would add one: it is reopened instead.
+    if (editor && (await editorState(nvim, editor.id))?.open === undefined) {
+      return { message: 'This editor is from before an update: save, close it (q) and reopen it from a tab.' };
+    }
+    return enterWriting(owner, place, editor, undefined, nvim, () => 'v:lua.PiMarkdownWrite()');
   });
 }
 
@@ -644,6 +648,12 @@ async function drawPanels(owner, { nvim, gone }) {
     .map(preview => tab(`ps${preview.id}`, `px${preview.id}`, `Diff: ${preview.name}`, preview === visible));
   const editor = shown.find(preview => preview.key === 'doc');
   const state = editor && nvim ? await editorState(nvim, editor.id) : undefined;
+  // Every file the editor holds is one of this Pi's documents, however it got there, so it has a tab and
+  // tab clicks, /panels and closing find it. Added here, under the lock every redraw holds; only for a live
+  // Pi (above), so a Pi that quit (close) or went keeps no list.
+  const listed = await documents(owner);
+  const held = [...state?.open ?? []].filter(file => !listed.includes(file));
+  if (held.length) await addDocuments(owner, held);
   const docs = await documents(owner);
   for (const file of docs) {
     // A removed file has no tab, unless the editor still holds its unsaved text; it returns if recreated.
@@ -1032,7 +1042,10 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
     // On session start: records this Pi's session and adopts previews a previous Pi of it left (claimSession).
     // Returns a warning about this session's other editors that could not simply be taken over.
     async claim(session) {
-      if (!env.TMUX || !owner || !session) return;
+      if (!env.TMUX || !owner) return;
+      // A Pi without a session records itself all the same, so its quit can mark it gone (close).
+      if (!session) return void await tmux('set-option', '-p', '-t', owner, PI_PID,
+        `${process.pid} ${(await tmux('display-message', '-p', '-t', owner, '#{pane_pid}')).trim()}`).catch(() => {});
       const { unanswered, unclear, kept } = await serial(() => claimSession(owner, session, { nvim }));
       held = unclear;
       return [
@@ -1121,23 +1134,29 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
           await dropSidebarOnly(preview.window);
         }
         // The editor exits only if nothing is unsaved; otherwise, or if it does not answer, it stays open.
+        // Then, under the lock every redraw holds, Pi lets go: an editor kept for unsaved text stands alone,
+        // with no row pointing at this Pi, and one that could not come beside Pi is an ordinary window,
+        // listed in the Windows row. Last, this Pi is marked gone, as one stopped by a signal is
+        // (releaseOrphans): a later redraw (the kept editor's) neither draws its row nor lists the editor's
+        // files as its documents again, and a resume elsewhere may adopt the editor only once it is let go,
+        // since adoption takes a Pi's previews only when it is gone. A Pi started here records itself afresh.
         await withDocuments(owner, async () => {
           for (const preview of previews.filter(preview => preview.key === 'doc')) {
             const server = await docServer(preview.id);
             if (server && nvim) await remote(server, 'v:lua.PiMarkdownQuit()').catch(() => {});
           }
           await tmux('set-option', '-pu', '-t', owner, DOCS).catch(() => {});
+          for (const pane of [owner, ...previews.map(preview => preview.id)]) await tmux('set-option', '-pu', '-t', pane, PANELS).catch(() => {});
+          for (const { window } of (await layout().catch(() => ({ previews: [] }))).previews.filter(preview => preview.window !== first.window)) {
+            await tmux('set-option', '-wu', '-t', window, PREVIEW_WINDOW).catch(() => {});
+            await tmux('set-option', '-wu', '-t', window, PANELS).catch(() => {});
+          }
+          await tmux('set-option', '-pu', '-t', owner, PI_OWNER).catch(() => {});
+          await tmux('set-option', '-wu', '-t', owner, PANELS).catch(() => {});
+          await tmux('set-option', '-wu', '-t', owner, PI_WINDOW).catch(() => {});
+          const recorded = (await tmux('show-options', '-pqv', '-t', owner, PI_PID).catch(() => '')).trim().split(' ');
+          if (recorded[0] === String(process.pid)) await tmux('set-option', '-p', '-t', owner, PI_PID, `${recorded[0]} ${recorded[1]} ${LEFT}`);
         }).catch(() => {});
-        // Pi is leaving: an editor kept for unsaved text stands alone, with no row pointing at this Pi, and
-        // one that could not come beside Pi is an ordinary window, listed in the Windows row.
-        for (const pane of [owner, ...previews.map(preview => preview.id)]) await tmux('set-option', '-pu', '-t', pane, PANELS).catch(() => {});
-        for (const { window } of (await layout().catch(() => ({ previews: [] }))).previews.filter(preview => preview.window !== first.window)) {
-          await tmux('set-option', '-wu', '-t', window, PREVIEW_WINDOW).catch(() => {});
-          await tmux('set-option', '-wu', '-t', window, PANELS).catch(() => {});
-        }
-        await tmux('set-option', '-pu', '-t', owner, PI_OWNER).catch(() => {});
-        await tmux('set-option', '-wu', '-t', owner, PANELS).catch(() => {});
-        await tmux('set-option', '-wu', '-t', owner, PI_WINDOW).catch(() => {});
       });
     },
   };
