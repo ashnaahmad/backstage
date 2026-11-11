@@ -10,7 +10,6 @@
   "enabledModels": [
     "claude-bridge/claude-opus-5-5",
     "claude-bridge/claude-sonnet-5-5",
-    "claude-bridge/claude-fable-5-1",
     "claude-bridge/claude-fable-5-2",
     "openai/gpt-6.1-sol",
     "openai/gpt-6-luna",
