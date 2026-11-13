@@ -34,6 +34,8 @@ const previous = { TMUX: process.env.TMUX, TMUX_PANE: process.env.TMUX_PANE, XDG
 const signals = Object.fromEntries(['SIGHUP', 'SIGTERM'].map(signal => [signal, process.listeners(signal)]));
 let owner, extension, context, notices = [];
 let calls = 0;
+// A quit marks its Pi gone in its pane, so a test that goes on in that pane after one starts a new Pi there
+// first (session_start), as a user would.
 const fire = async (name, event, ctx = context, ext = extension) => {
   for (const handler of ext.handlers.get(name) ?? []) await handler(event, ctx);
 };
@@ -47,8 +49,11 @@ async function tool(toolName, change, ctx = context, ext = extension, input = {}
 }
 async function load() {
   const modules = execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim();
-  const { loadExtensions } = await import(pathToFileURL(join(modules, '@earendil-works/pi-coding-agent/dist/core/extensions/loader.js')).href);
-  const result = await loadExtensions([join(root, 'pi/extensions/diff-pane.ts')], root);
+  const { loadExtensions, createExtensionRuntime } = await import(pathToFileURL(join(modules, '@earendil-works/pi-coding-agent/dist/core/extensions/loader.js')).href);
+  // Session entries the extension records (worktrees, temporary files) go nowhere, as with no session file.
+  const runtime = createExtensionRuntime();
+  runtime.appendEntry = () => {};
+  const result = await loadExtensions([join(root, 'pi/extensions/diff-pane.ts')], root, undefined, runtime);
   assert.deepEqual(result.errors, []);
   return result.extensions[0];
 }
@@ -182,6 +187,7 @@ test('reload keeps and adopts the pane; quit closes only this owner\'s pane', as
 });
 
 test('a change that leaves a clean tree does not open a pane', async () => {
+  await fire('session_start', {});  // a new Pi in the pane where the last one quit
   await fire('before_agent_start', {});
   await tool('bash', () => { git('add', '-A'); git('commit', '-qm', 'all'); });
   assert.deepEqual(diffPanes(owner), []);
@@ -243,6 +249,7 @@ test('unsaved edits survive other documents, agent writes and Pi quit', async ()
 });
 
 test('mixed code and Markdown changes show the editor and park Hunk; closing the editor is respected', async () => {
+  await fire('session_start', {});  // a new Pi in the pane where the last one quit
   await fire('before_agent_start', {});
   await tool('edit', () => { appendFileSync(join(repo, 'tracked.txt'), 'mixed code\n'); appendFileSync(notes, 'mixed notes\n'); });
   const [doc] = docPanes(owner), [diff] = diffPanes(owner);
@@ -261,6 +268,7 @@ test('mixed code and Markdown changes show the editor and park Hunk; closing the
 });
 
 test('deleting a Markdown file shows the deletion in Hunk, not the editor', async () => {
+  await fire('session_start', {});  // a new Pi in the pane where the last one quit
   await fire('before_agent_start', {});
   await tool('bash', () => rmSync(guide));
   assert.deepEqual(docPanes(owner), []);
@@ -281,6 +289,7 @@ test('Hunk with nothing to show exits at startup and marks the Pi pane', async (
 });
 
 test('a diff that becomes empty closes Hunk without counting as dismissal; a filter does not', async () => {
+  await fire('session_start', {});  // a new Pi in the pane where the last one quit
   await fire('before_agent_start', {});
   const tracked = join(repo, 'tracked.txt');
   await tool('edit', () => appendFileSync(tracked, 'reverted soon\n'));
@@ -398,26 +407,27 @@ test('the show_panel tool lets the agent open a document as /panel does', async 
 });
 
 test('skill Markdown the agent edits or writes becomes a document tab, outside any watched repository', async () => {
-  // A skills folder outside the repository and Git, as in ~/.agent-skills; Pi works in the repository.
-  const skill = join(dir, 'skills-home', 'demo'), loose = join(dir, 'skills-home', 'loose.md');
+  // A skills folder outside the repository and Git, as in ~/.agent-skills; Pi works in the repository. (Markdown
+  // outside a skill opening nothing is tested in temp-panels.test.mjs: this fixture is in a temporary folder,
+  // where Markdown the session writes is its own.)
+  const skill = join(dir, 'skills-home', 'demo');
   mkdirSync(join(skill, 'references'), { recursive: true });
   writeFileSync(join(skill, 'SKILL.md'), '# Demo skill\n');
-  writeFileSync(loose, '# Not in a skill\n');
   const reference = join(skill, 'references', 'guide.md');
   const call = (name, path, change) => tool(name, change, context, extension, { path });
   const listed = () => tmux('show-options', '-pqv', '-t', owner, '@pi_docs').split('\n').filter(Boolean);
   const shows = text => { const [pane] = docPanes(owner); return pane && tmux('capture-pane', '-p', '-t', pane).includes(text); };
+  await fire('session_start', {});  // a new Pi in the pane where the last one quit
   await fire('before_agent_start', {});  // a new prompt: earlier tests closed the editor
   try {
-    await call('edit', loose, () => appendFileSync(loose, 'loose edit\n'));
     await call('edit', join(skill, 'SKILL.md'), () => {});  // an edit that changed nothing
-    assert.deepEqual(docPanes(owner), [], 'Markdown outside a skill, or an unchanged skill file, opens nothing');
+    assert.deepEqual(docPanes(owner), [], 'an unchanged skill file opens nothing');
 
     await call('write', reference, () => writeFileSync(reference, '# Guide\n\nnew reference text\n'));
     await waitFor(() => shows('new reference text'), 'a new skill reference opens in the editor');
     await call('edit', join(skill, 'SKILL.md'), () => appendFileSync(join(skill, 'SKILL.md'), 'edited skill body\n'));
     await waitFor(() => shows('edited skill body'), 'an edited SKILL.md opens in the editor');
-    assert.deepEqual(listed().sort(), [join(skill, 'SKILL.md'), reference].sort(), 'both are document tabs; the loose file is not');
+    assert.deepEqual(listed().sort(), [join(skill, 'SKILL.md'), reference].sort(), 'both are document tabs');
     // A new skill: its SKILL.md did not exist before the write.
     const fresh = join(dir, 'skills-home', 'fresh');
     mkdirSync(fresh);
@@ -439,6 +449,7 @@ test('/create makes an empty file and opens it; it never overwrites or creates f
   const create = async (args, ctx) => { await extension.commands.get('create').handler(args, ctx); return notices.pop(); };
   const here = { ...context, cwd: dir };
   const fresh = join(dir, 'new idea.md'), kept = join(dir, 'kept.md');
+  await fire('session_start', {});  // a new Pi in the pane where the last one quit
   writeFileSync(kept, '# Kept\n\nexisting text\n');
   try {
     assert.equal(await create('"new idea.md"', here), undefined, 'no warning');
@@ -466,6 +477,7 @@ test('/create makes an empty file and opens it; it never overwrites or creates f
 
 test('a Hunk pane from before root tags is adopted by its directory after reload, not duplicated', async () => {
   for (const [id] of panes()) if (id !== owner) tmux('kill-pane', '-t', id);
+  await fire('session_start', {});  // a new Pi in the pane where the last one quit
   await fire('before_agent_start', {});
   const legacy = tmux('split-window', '-d', '-h', '-P', '-F', '#{pane_id}', '-t', owner, '-c', repo, 'sleep 60');
   tmux('set-option', '-p', '-t', legacy, '@pi_diff_owner', owner);
@@ -625,6 +637,7 @@ test('pi.previewRoot repositories share one visible preview beside Pi; /panel sw
   await waitFor(() => docPanes(owner).length === 0, 'the user closes it');
 
   // Dismissal is per preview; a parked preview that exits leaves no sidebar-only window.
+  await fire('session_start', {});  // a new Pi in the pane where the last one quit
   await fire('before_agent_start', {});
   await tool('bash', () => { appendFileSync(join(main, 'shared.txt'), 'm\n'); appendFileSync(join(vault, 'shared.txt'), 'v\n'); }, ctx);
   const parked = diffPanes(owner).find(pane => !beside().includes(pane));
@@ -703,6 +716,7 @@ test('bottom tab rows: real mouse clicks select and close previews and windows; 
     const beside = () => tmux('list-panes', '-t', owner, '-F', '#{pane_id}').split('\n').filter(id => id !== owner);
     const screenOuter = () => outer('capture-pane', '-p', '-t', 'outer');
 
+    await fire('session_start', {});  // a new Pi in the pane where the last one quit
     await fire('before_agent_start', {});
     await fire('session_start', {});
     await tool('edit', () => appendFileSync(join(repo, 'tracked.txt'), 'tab code\n'));
@@ -1649,6 +1663,7 @@ test('a document change whose Panels redraw fails still takes effect, warns brie
   const shows = text => tmux('capture-pane', '-p', '-t', docPanes(owner)[0]).includes(text);
   const warned = () => notices.filter(text => text === lib.NOT_REDRAWN).length;
   try {
+    await fire('session_start', {});  // a new Pi in the pane where the last one quit
     await fire('before_agent_start', {});
     await extension.commands.get('edit').handler(files.one, context);
     const before = warned();

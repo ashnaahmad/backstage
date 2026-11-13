@@ -2,8 +2,8 @@
 // One preview is visible at a time; /panel switches between them.
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { createReadStream, existsSync, realpathSync } from 'node:fs';
-import { lstat, open, readdir, readlink, stat } from 'node:fs/promises';
+import { createReadStream, existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import { copyFile, lstat, mkdir, open, readdir, readlink, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { accessSync, constants } from 'node:fs';
@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 
 const run = promisify(execFile);
 export const DIFF_OWNER = '@pi_diff_owner';
-const DIFF_ROOT = '@pi_diff_root';        // repository a Hunk pane shows
+const DIFF_ROOT = '@pi_diff_root';        // repository a Hunk pane shows, or a temporary file
+const DIFF_BASE = '@pi_diff_base';        // a temporary file's Hunk: JSON { baseline, added } (see `temps` in createDiffPane)
 const DIFF_EMPTY = '@pi_diff_empty_';     // + Hunk pane number, set on the Pi pane when that Hunk exits with nothing to show
 export const DOC_OWNER = '@pi_doc_owner';
 const DOC_SERVER = '@pi_doc_server';
@@ -161,16 +162,19 @@ export const paneExists = async pane => (await tmux('display-message', '-p', '-t
  */
 async function ownedPreviews(owner) {
   const format = ['#{pane_id}', '#{window_id}', '#{window_index}', '#{pane_active}', `#{${DIFF_OWNER}}`, `#{${DOC_OWNER}}`, `#{${DIFF_ROOT}}`,
-    '#{pane_current_path}', `#{${WRITING}}`].join('\t');
+    '#{pane_current_path}', `#{${WRITING}}`, `#{${DIFF_BASE}}`].join('\t');
   const rows = await allPanes(format);
   const previews = [];
-  for (const [id, window, index, active, diff, doc, tagged, cwd, writing] of rows) {
+  for (const [id, window, index, active, diff, doc, tagged, cwd, writing, base] of rows) {
     if (doc === owner) previews.push({ id, window, index, active: active === '1', key: 'doc', name: 'edit', label: 'edit', writing: writing === '1' });
     if (diff !== owner) continue;
     // A Hunk pane from before root tags shows the repository it was started in.
     const root = tagged || await repoRoot(cwd) || cwd;
     if (!tagged) await tmux('set-option', '-p', '-t', id, DIFF_ROOT, root).catch(() => {});
-    previews.push({ id, window, index, active: active === '1', key: `diff:${root}`, root, name: basename(root), label: `diff:${basename(root)}` });
+    // A temporary file's Hunk carries the file's baseline, so a session it is carried into knows it.
+    let temp;
+    try { if (base) { const { baseline, added } = JSON.parse(base); temp = { baseline, added: added === true }; } } catch {}
+    previews.push({ id, window, index, active: active === '1', key: `diff:${root}`, root, name: basename(root), label: `diff:${basename(root)}`, temp });
   }
   return previews.sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)));
 }
@@ -706,6 +710,29 @@ function toolPath(event, cwd) {
   return resolve(cwd, bare === '~' || bare.startsWith('~/') ? homedir() + bare.slice(1) : bare);
 }
 
+/**
+ * The system's temporary folders, canonical (/tmp is /private/tmp on macOS): the per-user one Node
+ * reports (TMPDIR), /tmp and /var/tmp. A file there that is not in a watched repository is this session's
+ * only file by file (see `temps` in createDiffPane).
+ */
+export function systemTempRoots() {
+  return [...new Set([tmpdir(), '/tmp', '/var/tmp'].filter(existsSync).map(canonical))];
+}
+
+// Where a write to `file` lands: its own canonical path (following symlinks, a dangling one to the file it
+// would create), or for a new file the canonical path of its nearest existing folder with the rest appended,
+// as the write tool creates missing folders.
+function landing(file, links = 0) {
+  if (existsSync(file)) return canonical(file);
+  let link;
+  try { if (lstatSync(file).isSymbolicLink()) link = readlinkSync(file); } catch {}
+  if (link !== undefined && links < 40) return landing(resolve(dirname(file), link), links + 1);
+  const parent = dirname(file);
+  return parent === file ? file : join(landing(parent, links), basename(file));
+}
+const EMPTY = createHash('sha256').digest('hex');   // worktreeState's hash of an empty file
+const inside = (file, roots) => roots.some(root => file === root || file.startsWith(root + '/'));
+
 async function newest(docs) {
   const dated = await Promise.all(docs.map(async doc => [doc, (await stat(doc.file).catch(() => undefined))?.mtimeMs ?? 0]));
   return dated.sort((a, b) => b[1] - a[1])[0][0];
@@ -715,7 +742,8 @@ async function newest(docs) {
  * Per-runtime controller. Every tmux operation is limited to panes tagged with this owner.
  * One preview is visible beside Pi; the others wait in their own windows of Pi's session.
  */
-export function createDiffPane({ env = process.env, hunk = findExecutable('hunk', env.PATH), nvim = findExecutable('nvim', env.PATH) } = {}) {
+export function createDiffPane({ env = process.env, hunk = findExecutable('hunk', env.PATH), nvim = findExecutable('nvim', env.PATH),
+  tempRoots = systemTempRoots() } = {}) {
   const owner = env.TMUX_PANE;
   // Keyed by preview: 'doc', or 'diff:' + repository root.
   const seen = new Map();          // pane seen during the current prompt
@@ -732,6 +760,65 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
   // Restored from the session at start; `associated` are the new ones, for the caller to record.
   let worktrees = [], associated = [];
   const associate = root => { if (!worktrees.includes(root)) { worktrees.push(root); associated.push(root); } };
+  // Files in a temporary folder (tempRoots) that are this session's, one by one: one it edited or wrote with
+  // its own tools, or one named with /panel or show_panel (a command's or script's output). Nothing in a
+  // temporary folder is otherwise this session's: other agents write there too. A watched repository or
+  // worktree keeps its own diff. Canonical path → { file, baseline, added }: `baseline` is the copy of its
+  // content just before the session first touched it, in `baselines` (a folder of the session's own, outside
+  // the conversation), compared with it by a Hunk of its own; an empty copy (`added`) for a file that was
+  // new, or that was named only after something made it, so it shows as added. A lost empty copy is made
+  // again, being empty by definition; any other lost copy is reported, never rebuilt from the file as it is
+  // now. Markdown goes to the editor, as in a repository, unless Neovim is missing. Restored from the
+  // session at start, and carried with a temporary file's Hunk into a session that adopts it (claim);
+  // `freshTemps` are the new ones, for the caller to record.
+  let temps = new Map(), freshTemps = [], baselines;
+  let tempTurn;   // each of the session's temporary files → its state before the current turn
+  // Whether `file` is one of the session's temporary files shown as a diff rather than in the editor.
+  const isTemp = file => temps.has(file) && !(nvim && MARKDOWN.test(file));
+  async function adoptTemp(file, { added = false } = {}) {
+    if (temps.has(file)) return;
+    if (!baselines) throw new Error('no folder for baselines of temporary files');
+    const copy = join(baselines, createHash('sha256').update(file).digest('hex').slice(0, 16), basename(file));
+    await mkdir(dirname(copy), { recursive: true, mode: 0o700 });
+    const info = await stat(file).catch(() => undefined);
+    if (added || !info?.isFile()) await writeFile(copy, '', { mode: 0o600 });
+    else await copyFile(file, copy);
+    await own({ file, baseline: copy, added: added || !info?.isFile() });
+  }
+  async function own(entry) {
+    temps.set(entry.file, entry);
+    freshTemps.push(entry);
+    tempTurn?.set(entry.file, await worktreeState(entry.file));
+  }
+  // Whether the session's temporary file is still there as the file it owns: 'deleted', 'replaced' (the path
+  // now leads elsewhere, as a symlink or through a moved folder, so what it shows is not the session's file;
+  // Hunk and Neovim follow symlinks) or 'present'. Nothing opens a temporary file that is not 'present'.
+  async function tempPresence(file) {
+    const info = await lstat(file).catch(() => undefined);
+    if (!info) return 'deleted';
+    return !info.isFile() || canonical(file) !== file ? 'replaced' : 'present';
+  }
+  /**
+   * What a Hunk of one of the session's temporary files would show, the one rule for whether it may show:
+   * 'added' or 'changed' may; 'no changes' shows nothing; 'deleted', 'replaced' (tempPresence) or 'baseline
+   * missing' (its original content was not kept) cannot show.
+   */
+  async function tempStatus(file) {
+    const { baseline, added } = temps.get(file);
+    const presence = await tempPresence(file);
+    if (presence !== 'present') return presence;
+    if (added) return (await worktreeState(file)).endsWith(` ${EMPTY}`) ? 'no changes' : 'added';
+    const [now, then] = await Promise.all([worktreeState(file), worktreeState(baseline)]);
+    if (then === 'missing') return 'baseline missing';
+    return now.split(' ')[1] === then.split(' ')[1] ? 'no changes' : 'changed';
+  }
+  const showable = state => state === 'added' || state === 'changed';
+  // Whether `file` (canonical) is a temporary file outside what this Pi watches with Git.
+  async function temporary(file, cwd) {
+    if (!inside(file, tempRoots)) return false;
+    const { roots, made } = await watched(cwd);
+    return !inside(file, [...roots, ...made]);
+  }
   let queue = Promise.resolve();
   const serial = task => (queue = queue.then(task, task));
   const available = mode => Boolean(mode === 'tui' && env.TMUX && owner && hunk);
@@ -771,16 +858,27 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
   // One Hunk per changed repository, each comparing against its own HEAD and dismissed on its own.
   async function showDiff(root) {
     const key = `diff:${root}`;
+    // A temporary file's Hunk opens, or stays, only while it has something true to show.
+    const temp = isTemp(root) && temps.get(root);
+    if (temp && !showable(await tempStatus(root))) return void await retire([root]);
     const place = await layout();
     const pane = await existing(key, place.previews);
     if (pane !== undefined) return pane || undefined;
     const extension = name => ['--extension', fileURLToPath(new URL(`../../extensions/hunk/${name}`, import.meta.url))];
-    const args = ['diff', ...(await headCommit(root) ? ['HEAD'] : []), '--watch',
-      ...extension('recent-files.mjs'), ...extension('close-when-empty.mjs'), '--', ...SHOWN];
-    const id = await start(place, `diff:${basename(root)}`, root, { HUNK_MCP_DISABLE: '1', PI_DIFF_OWNER: owner }, [hunk, ...args]);
+    // A temporary file against its baseline copy (named as the file, so Hunk labels both sides alike); Hunk
+    // reads both by path, so it starts in home, as the editor does, not a folder that may go. An added
+    // file's copy is empty by definition, so a lost one is made again.
+    if (temp?.added && !existsSync(temp.baseline)) {
+      await mkdir(dirname(temp.baseline), { recursive: true, mode: 0o700 });
+      await writeFile(temp.baseline, '', { mode: 0o600 });
+    }
+    const args = temp ? ['diff', '--files', temp.baseline, root, '--watch']
+      : ['diff', ...(await headCommit(root) ? ['HEAD'] : []), '--watch', ...extension('recent-files.mjs'), ...extension('close-when-empty.mjs'), '--', ...SHOWN];
+    const id = await start(place, `diff:${basename(root)}`, temp ? homedir() : root, { HUNK_MCP_DISABLE: '1', PI_DIFF_OWNER: owner }, [hunk, ...args]);
     seen.set(key, id);
     // Hunk may already have exited with nothing to show. The root comes first: an owned pane always has one.
     await tmux('set-option', '-p', '-t', id, DIFF_ROOT, root).catch(() => {});
+    if (temp) await tmux('set-option', '-p', '-t', id, DIFF_BASE, JSON.stringify({ baseline: temp.baseline, added: temp.added })).catch(() => {});
     await tmux('set-option', '-p', '-t', id, DIFF_OWNER, owner).catch(() => {});
     return id;
   }
@@ -788,13 +886,14 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
   // The single editor takes the newest changed document across all repositories and is preferred
   // for display; otherwise the first changed repository. Returns a notice when it stays parked, and
   // whether documents were loaded.
-  async function show(changes, skillDocs = []) {
+  async function show(changes, skillDocs = [], tempDiffs = []) {
     const panes = [], docs = [...skillDocs];
     for (const { root, paths, files } of changes) {
       const changed = nvim ? paths.filter(path => MARKDOWN.test(path) && files.get(path) !== 'missing') : [];
       if (paths.length > changed.length) panes.push(await showDiff(root));
       docs.push(...changed.map(path => ({ root, file: resolve(root, path) })));
     }
+    for (const file of tempDiffs) panes.push(await showDiff(file));
     if (docs.length) {
       // Every changed document gets a tab; the editor opens the newest. It is not restarted once the user
       // closed it this prompt.
@@ -814,6 +913,37 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
     return { loaded };
   }
   const render = () => renderPanels(owner, { nvim }).catch(() => {});
+
+  // Closes the Hunk of each of these temporary files, which has nothing true to show (tempStatus): Hunk would
+  // go on showing a file that has gone as it was, an empty comparison, or what a replaced path leads to. As
+  // a repository diff with nothing left to show closes itself, this is not a dismissal (closedEmpty).
+  async function retire(files) {
+    const { previews } = await layout();
+    for (const preview of previews.filter(preview => files.includes(preview.root))) {
+      await tmux('set-option', '-p', '-t', owner, DIFF_EMPTY + preview.id.slice(1), '1').catch(() => {});
+      await tmux('kill-pane', '-t', preview.id).catch(() => {});
+      await dropSidebarOnly(preview.window);
+    }
+    await render();
+  }
+
+  // At session start, once this Pi's previews are its own: a temporary file's Hunk carried into this session
+  // (a new or forked session in the same pane, or one adopted from a Pi that went) makes that file the
+  // session's, with the baseline the Hunk carries; then any temporary file's Hunk with nothing true to show
+  // closes (tempStatus), such as one whose original baseline has gone.
+  async function reconcileTemps() {
+    const { previews } = await layout();
+    for (const preview of previews) if (preview.temp && !temps.has(preview.root)) await own({ file: preview.root, ...preview.temp });
+    await sweepTemps();
+  }
+  // Closes every open temporary-file Hunk with nothing true to show (tempStatus), however that came about (a
+  // baseline lost while the file stayed the same, say). Runs wherever previews are adopted, chosen or
+  // brought forward by Pi, and after every turn.
+  async function sweepTemps() {
+    const stale = [];
+    for (const preview of (await layout()).previews) if (isTemp(preview.root) && !showable(await tempStatus(preview.root))) stale.push(preview.root);
+    if (stale.length) await retire(stale);
+  }
 
   // This session's editors whose Pi may still run (claimSession's `unclear`): while one survives with that
   // owner, agent changes do not start an editor beside it; /edit still does. Once another Pi takes it
@@ -848,7 +978,7 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
     const { previews, visible } = await layout();
     const place = pane => pane && (pane === visible ? 'beside Pi' : `window ${pane.index}`);
     const list = [];
-    const others = previews.filter(preview => preview.root && !roots.includes(preview.root) && !made.includes(preview.root))
+    const others = previews.filter(preview => preview.root && !roots.includes(preview.root) && !made.includes(preview.root) && !isTemp(preview.root))
       .map(preview => preview.root);
     for (const root of [...roots, ...made, ...others]) {
       const key = `diff:${root}`;
@@ -857,6 +987,14 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
       const count = await shownPaths(root, await headCommit(root)).then(paths => paths.length, () => undefined);
       const state = count === undefined ? 'status unavailable' : count ? `${count} changed` : 'no changes';
       list.push({ key, root, name: basename(root), pane, place: place(pane), state, enabled: Boolean(pane || count) });
+    }
+    // Then this session's temporary files other than Markdown, each against its baseline.
+    for (const file of temps.keys()) {
+      if (!isTemp(file)) continue;
+      const key = `diff:${file}`;
+      const pane = previews.find(preview => preview.key === key);
+      const state = await tempStatus(file);
+      list.push({ key, root: file, name: basename(file), location: file, pane, place: place(pane), state, enabled: showable(state) });
     }
     return { roots, made, previews, place, list };
   }
@@ -875,6 +1013,10 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
         const file = canonical(resolve(root, path));
         if (!files.includes(file) && await stat(file).then(info => info.isFile(), () => false)) files.push(file);
       }
+    }
+    // This session's temporary Markdown.
+    for (const { file } of temps.values()) {
+      if (!isTemp(file) && !files.includes(file) && await tempPresence(file) === 'present') files.push(file);
     }
     const listed = new Set(await documents(owner));
     const changed = new Set(files.filter(file => !listed.has(file)));
@@ -906,6 +1048,7 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
 
   // An explicit choice reopens a closed repository preview, as /edit does for the editor.
   async function pick(entry) {
+    await sweepTemps();
     let { previews, visible } = await layout();
     let pane = previews.find(preview => preview.key === entry.key);
     if (!pane && entry.root) {
@@ -969,6 +1112,20 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
     setWorktrees(roots) { worktrees = [...new Set(roots)]; associated = []; },
     // Worktrees that became the session's since last asked, for the caller to record in the session.
     takeAssociated() { const fresh = associated; associated = []; return fresh; },
+    // At session start: the temporary files the session recorded as its own (see `temps`), and the folder for
+    // baselines of new ones. Returns a warning naming files whose recorded baseline has gone: their diff is
+    // unavailable rather than rebuilt from what the file holds now.
+    setTempFiles(entries, folder) {
+      baselines = folder;
+      temps = new Map();
+      freshTemps = [];
+      for (const entry of entries) if (entry?.file && !temps.has(entry.file)) temps.set(entry.file, entry);
+      const lost = [...temps.values()].filter(entry => entry.baseline && !entry.added && !existsSync(entry.baseline)).map(entry => entry.file);
+      return lost.length ? `No baseline remains for this session's temporary ${lost.length > 1 ? 'files' : 'file'} ` +
+        `${lost.join(', ')}, so ${lost.length > 1 ? 'their diffs are' : 'its diff is'} unavailable.` : undefined;
+    },
+    // Temporary files that became the session's since last asked, for the caller to record in the session.
+    takeTempFiles() { const fresh = freshTemps; freshTemps = []; return fresh; },
     // /panels: what can be shown beside Pi (see entries), for Pi's own selector.
     async choices(ctx) {
       if (ctx.mode !== 'tui' || !env.TMUX || !owner) throw new Error('/panels needs Pi running inside tmux.');
@@ -1003,13 +1160,30 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
         // own repository, recorded in the session) and its diff is shown.
         if (await stat(file).then(info => info.isDirectory(), () => false)) {
           const root = canonical(file);
-          if (await repoRoot(root) !== root) return `${file} is not the top-level folder of a Git worktree; give that folder.`;
+          const top = await repoRoot(root);
+          if (top !== root) {
+            if (!top && await temporary(root, ctx.cwd)) {
+              return `${file} is a temporary folder: only files are this session's there, not whole folders; give each file to show.`;
+            }
+            return `${file} is not the top-level folder of a Git worktree; give that folder.`;
+          }
           if (!(await previewRoots(ctx.cwd)).roots.includes(root)) associate(root);
           if (baseline && !baseline.some(entry => entry.root === root)) baseline.push({ root, before: await snapshot(root) });
           const count = await shownPaths(root, await headCommit(root)).then(paths => paths.length, () => undefined);
           if (!count) return `Watching ${root} for this session; it has ${count === 0 ? 'no changes' : 'no readable status'} to show yet.`;
           await serial(async () => { await pick({ key: `diff:${root}`, root }); await render(); });
           return `Watching ${root} for this session; showing its diff.`;
+        }
+        const target = landing(file);
+        // A temporary file becomes this session's: one it has no baseline for shows as added (a command or
+        // script made it before it was named). Markdown opens in the editor as any file does.
+        const temporaryFile = await stat(file).then(info => info.isFile(), () => false) && await temporary(target, ctx.cwd);
+        if (temporaryFile) await adoptTemp(target, { added: true });
+        if (temporaryFile && isTemp(target)) {
+          const entry = (await diffEntries(ctx.cwd)).list.find(entry => entry.key === `diff:${target}`);
+          if (!entry?.enabled) return `${target} is this session's; ${entry?.state ?? 'no diff'}, so there is nothing to show.`;
+          await serial(async () => { await pick(entry); await render(); });
+          return `${target} is this session's; showing its diff (${entry.state}).`;
         }
         if (await stat(file).then(info => info.isFile(), () => false)) {
           const warning = await edit(file, ctx);
@@ -1024,6 +1198,7 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
         looked = file;
       }
       return serial(async () => {
+        await sweepTemps();
         const { previews, visible } = await layout();
         const names = previews.map(preview => preview.name).join(', ') || 'none';
         if (looked) return `No preview, document tab or file named ${name} (no file at ${looked}). Open previews: ${names}`;
@@ -1044,10 +1219,14 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
     async claim(session) {
       if (!env.TMUX || !owner) return;
       // A Pi without a session records itself all the same, so its quit can mark it gone (close).
-      if (!session) return void await tmux('set-option', '-p', '-t', owner, PI_PID,
-        `${process.pid} ${(await tmux('display-message', '-p', '-t', owner, '#{pane_pid}')).trim()}`).catch(() => {});
+      if (!session) {
+        await tmux('set-option', '-p', '-t', owner, PI_PID,
+          `${process.pid} ${(await tmux('display-message', '-p', '-t', owner, '#{pane_pid}')).trim()}`).catch(() => {});
+        return void await serial(reconcileTemps);
+      }
       const { unanswered, unclear, kept } = await serial(() => claimSession(owner, session, { nvim }));
       held = unclear;
+      await serial(reconcileTemps);
       return [
         unanswered.length && `Took over this session's editor from before (${unanswered.join(', ')}), but it is not answering; its text stays in that pane.`,
         unclear.length && `This session's editor from before (${unclear.map(editor => editor.id).join(', ')}) is in a pane still running something, so it was not taken over. ` +
@@ -1057,7 +1236,7 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
     },
     // Redraws this Pi's Panels row; called on session start and after selections made outside Pi.
     render: () => env.TMUX && owner ? serial(render) : undefined,
-    newPrompt() { seen.clear(); dismissed.clear(); baseline = undefined; skillFiles = new Map(); },
+    newPrompt() { seen.clear(); dismissed.clear(); baseline = undefined; skillFiles = new Map(); tempTurn = undefined; },
     // Returns a warning, once per value, for a configured preview root that is not a Git repository.
     async before(event, ctx) {
       if (!available(ctx.mode) || READ_ONLY.has(event.toolName)) return;
@@ -1067,15 +1246,21 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
         const listed = await worktreeList(roots);
         // An edit or write in another worktree of these repositories: watched from this call, so this
         // turn's change there shows too.
-        // Where the write lands: the file's own canonical path (following a symlink), or for a new file its
-        // folder's.
-        const target = file && (existsSync(file) ? canonical(file) : join(canonical(dirname(file)), basename(file)));
-        const there = target && [...listed].filter(path => !roots.includes(path) && target.startsWith(path + '/')).sort((a, b) => b.length - a.length)[0];
+        const target = landing(file);
+        const there = [...listed].filter(path => !roots.includes(path) && target.startsWith(path + '/')).sort((a, b) => b.length - a.length)[0];
         const root = there && await repoRoot(there);
         if (root && !worktrees.includes(root)) {
           associate(root);
           if (baseline) baseline.push({ root, before: await snapshot(root) });
         }
+        // A temporary file this session writes is its own, with its content from before this first write.
+        if (await temporary(target, ctx.cwd)) await adoptTemp(target);
+      }
+      // Each of the session's temporary files as the turn found it, so a change by any tool (a command's
+      // too) shows after the turn.
+      if (!tempTurn) {
+        tempTurn = new Map();
+        for (const file of temps.keys()) tempTurn.set(file, await worktreeState(file));
       }
       // Skill documents become document tabs even outside the preview repositories, or ignored by Git.
       if (file && MARKDOWN.test(file) && !skillFiles.has(file)) skillFiles.set(file, await worktreeState(file));
@@ -1090,11 +1275,12 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
     // Returns undefined when the turn changed nothing, else { notice, warning }: a notice when a preview
     // waits, a warning when documents were loaded but the Panels row could not be redrawn.
     async settle() {
-      const call = baseline, touched = skillFiles;
+      const call = baseline, touched = skillFiles, temporaries = tempTurn;
       baseline = undefined;
       skillFiles = new Map();
-      if (!call && !touched.size) return;
-      const changes = [], skillDocs = [];
+      tempTurn = undefined;
+      if (!call && !touched.size && !temporaries?.size) return;
+      const changes = [], skillDocs = [], tempDiffs = [];
       for (const { root, before } of call ?? []) {
         const after = await snapshot(root);
         const paths = changedPaths(before, after);
@@ -1104,9 +1290,18 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
         const after = await worktreeState(file);
         if (after !== before && after !== 'missing' && nvim && await isSkillDocument(file)) skillDocs.push({ root: dirname(file), file });
       }
-      if (!changes.length && !skillDocs.length) return;
+      // The session's temporary files this turn changed: Markdown to the editor, others to their diff (which
+      // closes instead when it has nothing true left to show: showDiff).
+      for (const [file, before] of temporaries ?? []) {
+        const after = await worktreeState(file);
+        if (after === before) continue;
+        if (isTemp(file)) tempDiffs.push(file);
+        else if (await tempPresence(file) === 'present' && !skillDocs.some(doc => canonical(doc.file) === file)) skillDocs.push({ root: dirname(file), file });
+      }
+      if (temps.size) await serial(sweepTemps);
+      if (!changes.length && !skillDocs.length && !tempDiffs.length) return;
       return serial(async () => {
-        const { notice, loaded } = await show(changes, skillDocs);
+        const { notice, loaded } = await show(changes, skillDocs, tempDiffs);
         const drawn = await renderPanels(owner, { nvim }).then(() => true, () => false);
         return { notice, warning: loaded && !drawn ? NOT_REDRAWN : undefined };
       });
@@ -1116,6 +1311,7 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
     async close(mode, { signalled = () => false } = {}) {
       baseline = undefined;
       skillFiles = new Map();
+      tempTurn = undefined;
       // Child Pi processes (reviewers, `pi -p`) inherit TMUX_PANE; only the terminal UI owns the panes.
       if (!env.TMUX || !owner || mode !== 'tui') return;
       await serial(async () => {

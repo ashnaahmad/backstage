@@ -3,11 +3,20 @@ import { DynamicBorder, type ExtensionAPI } from '@earendil-works/pi-coding-agen
 import { Container, Input, Spacer, Text, fuzzyFilter, getKeybindings } from '@earendil-works/pi-tui';
 // TypeScript, not .mjs: Pi's loader imports .mjs natively, and Node keeps that module across /reload.
 import { createDiffPane } from '../../scripts/lib/diff-pane.ts';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 // Session entry recording a worktree that is this session's (see `worktrees` in scripts/lib/diff-pane.ts).
 // Entries of the earlier 'harness-spawned-worktree' type are not read: any worktree that appeared during
 // a turn was recorded there, whoever made it.
 const WORKTREE_ENTRY = 'harness-session-worktree';
+// Session entry recording a temporary file that is this session's, with where its baseline copy is kept
+// (see `temps` in scripts/lib/diff-pane.ts). The copies stay outside the conversation, in local state.
+const TEMP_ENTRY = 'harness-session-temp-file';
+// The session's own folder of baseline copies, by session id; a forked session reads its parent's copies
+// through the paths its entries carry.
+const baselineFolder = id => join(process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'pi-harness', 'temp-baselines',
+  id || `no-session-${process.pid}`);
 
 /**
  * Opens a live Hunk diff, or an editable Neovim for changed Markdown, beside Pi in tmux after a turn changes the
@@ -78,7 +87,12 @@ export default function diffPane(pi: ExtensionAPI) {
   let signalled = false, listening = false;
   const onSignal = () => { signalled = true; };
   // Records worktrees that became this session's (an edit there, or chosen with /panel or show_panel).
-  const record = () => { for (const root of pane.takeAssociated()) pi.appendEntry(WORKTREE_ENTRY, { root }); };
+  // Records worktrees and temporary files that became this session's (an edit there, or chosen with /panel
+  // or show_panel).
+  const record = () => {
+    for (const root of pane.takeAssociated()) pi.appendEntry(WORKTREE_ENTRY, { root });
+    for (const entry of pane.takeTempFiles()) pi.appendEntry(TEMP_ENTRY, entry);
+  };
   const report = (ctx, error) => ctx.hasUI && ctx.ui.notify(`Diff pane: ${String(error)}`, 'warning');
   // A change that took effect while its Panels tab row could not be redrawn.
   const warn = (ctx, warning) => warning && ctx.hasUI && ctx.ui.notify(warning, 'warning');
@@ -121,9 +135,12 @@ export default function diffPane(pi: ExtensionAPI) {
       'Give the top-level folder of a Git worktree you created or are working in (by a command, script or handoff) to make it this ' +
       'session\'s: its diff is shown and watched after your turns, across reload and resume. Do this after creating a worktree, ' +
       'unless you edit or write its files with your own tools, which selects it already. ' +
+      'Likewise give the path of each file a command or script made in a temporary folder (/tmp and the like) to make it this ' +
+      'session\'s: Markdown opens in the editor, other files show their diff, as added since it was not yours before. ' +
+      'Files you edit or write there with your own tools are yours already, compared with what they held before. ' +
       'Use this instead of asking the user to run /edit or /panel. Unsaved text in the editor is kept; focus stays in Pi.',
     parameters: Type.Object({
-      name: Type.Optional(Type.String({ description: 'File path, document tab name, "edit", repository name, or worktree folder path.' })),
+      name: Type.Optional(Type.String({ description: 'File path, document tab name, "edit", repository or file diff name, or worktree folder path.' })),
     }),
     async execute(_id, params, _signal, _update, ctx) {
       let text;
@@ -148,6 +165,9 @@ export default function diffPane(pi: ExtensionAPI) {
     const entries = ctx.sessionManager?.getEntries?.() ?? [];
     pane.setWorktrees(entries.filter(entry => entry.type === 'custom' && entry.customType === WORKTREE_ENTRY)
       .map(entry => entry.data?.root).filter(Boolean));
+    const lost = pane.setTempFiles(entries.filter(entry => entry.type === 'custom' && entry.customType === TEMP_ENTRY)
+      .map(entry => entry.data), baselineFolder(ctx.sessionManager?.getSessionId?.()));
+    if (lost && ctx.mode === 'tui' && ctx.hasUI) ctx.ui.notify(lost, 'warning');
     // A signal stops Pi through the same quit as /quit: a quit Pi chose closes its previews, a signal
     // (tmux closing its pane, kill) leaves them for a resume. Node runs every listener of a signal before
     // any promise callback, so the flag is set when close() reads it in its queued step. Only in the
@@ -167,6 +187,7 @@ export default function diffPane(pi: ExtensionAPI) {
     // this pane keep its previews, which then belong to the new session.
     if (ctx.mode === 'tui') try {
       const warning = await pane.claim(ctx.sessionManager?.getSessionId());
+      record();   // temporary files whose Hunk this session took over
       if (warning && ctx.hasUI) ctx.ui.notify(warning, 'warning');
       await pane.render();
     } catch (error) { report(ctx, error); }
@@ -176,7 +197,7 @@ export default function diffPane(pi: ExtensionAPI) {
     try {
       const warning = await pane.before(event, ctx);
       if (warning) report(ctx, warning);
-    } catch (error) { report(ctx, error); }
+    } catch (error) { report(ctx, error); } finally { record(); }
   });
   // After every tool call in the turn has finished; returns nothing, so the turn is unchanged.
   pi.on('turn_end', async (_event, ctx) => {

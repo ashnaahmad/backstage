@@ -749,6 +749,51 @@ without it. Nothing is inferred from commands or from a
 worktree appearing in `git worktree list`, which another agent
 may have made; records from before this change are not read.
 
+A session's own files in a temporary folder (`/tmp`, `/var/tmp`
+or the per-user folder `TMPDIR` names; `/tmp` and
+`/private/tmp` are one place on macOS) show the same way,
+file by file, beside its repositories and worktrees. A file
+there becomes the session's when the agent edits or writes it
+with its own tools, or when it is named by path with
+`/panel /tmp/run/out.csv` or the agent's `show_panel`, whose
+description asks the agent to name what a command or script
+made. Nothing else in a temporary folder is the session's:
+other agents write there too, so commands are not read,
+folders are not scanned, and a temporary folder cannot be
+named as a whole. Files of a watched repository or session
+worktree inside a temporary folder keep the repository's diff.
+Markdown opens in the editor as a document tab; any other
+file opens its own Hunk (`hunk diff --files`), a `Diff:` tab
+like a repository's, comparing the file with a copy of what
+it held just before the session first touched it. A file that
+was new, or that was named only after a command made it, has
+an empty copy and shows as added. Later turns that change the
+file, by any tool, update or reopen its diff. A diff closes
+(without counting as the user closing it) when it has nothing
+true to show: the file was deleted or returned to its copy,
+the copy has gone, or the path now leads elsewhere (a symlink
+or moved folder). Pi checks this after every turn and when it
+selects, brings forward or adopts a preview; a diff chosen by
+clicking its Panels tab is checked at the end of the next turn.
+A turn does not open temporary Markdown whose path leads
+elsewhere either, though an editor already holding that path
+keeps its buffer as Neovim does.
+
+The session records each file and where its copy is in its
+session file, so `/reload`, resume and forks keep them; the
+copies themselves stay out of the conversation, under
+`${XDG_STATE_HOME:-~/.local/state}/pi-harness/temp-baselines/<session id>/`
+(private to the user). A fork reads its parent's copies by
+path. A copy that has gone is reported when the session
+starts and its diff is unavailable: it is never rebuilt from
+what the file holds now (an added file's empty copy is made
+again, being empty by definition). A temporary diff carried
+into a new session in the same pane (`/new`, or a resume
+adopting a gone Pi's previews) brings its file and copy with
+it. Nothing removes the copies yet: they last as long as the
+sessions that may resume or fork from them; delete a
+session's folder once nothing will resume it.
+
 Diffs leave out the page snapshots Playwright's CLI writes into
 a `.playwright-cli` folder wherever it runs: they neither open
 a diff nor count as changes.
@@ -770,8 +815,16 @@ Outside tmux, and in print/RPC child processes, it does
 nothing. `HUNK_MCP_DISABLE=1` stops Hunk from starting its
 background session daemon, so Hunk's agent-session commands
 do not reach this pane. Tests:
-`node --test scripts/tests/diff-pane.test.mjs` (disposable
-tmux server and scripted model; no model calls).
+`node --test scripts/tests/diff-pane.test.mjs` and
+`scripts/tests/temp-panels.test.mjs` (disposable tmux server
+and scripted model; no model calls). Run them with `HOME`,
+`XDG_*`, `TMUX_TMPDIR`, `CCMUX_HOME` and `TMPDIR` pointed at a
+temporary folder, `TMUX`/`TMUX_PANE` unset and
+`HUNK_MCP_DISABLE=1`: Hunk and Neovim write state under `HOME`,
+and a Hunk started without that variable launches a daemon.
+Link or copy the installed `pi-markdown` data folder into the
+test `XDG_DATA_HOME` so the editor finds its renderer;
+`temp-panels` refuses to run with the real `HOME`.
 `/readfiles` remains available for browsing files.
 
 Use `/edit PLAN.md` to open an existing document on demand,
@@ -783,7 +836,8 @@ it the same way. It never overwrites an existing file and does
 not create missing folders.
 
 The agent can do what `/panel` does through its `show_panel`
-tool: a file path opens that document in the editor, and a tab
+tool: a file path opens that document in the editor (or, for a
+temporary file, makes it the session's as above), and a tab
 or repository name shows that preview. With no name, it cycles
 to the next preview. The interactive `/panels` menu stays with
 the user.
