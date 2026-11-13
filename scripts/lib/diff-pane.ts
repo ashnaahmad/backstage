@@ -33,6 +33,22 @@ const MARKDOWN = /\.(md|markdown)$/i;
 const WRITES = new Set(['edit', 'write']);
 const EDITOR_CONFIG = fileURLToPath(new URL('../../nvim/pi-markdown/init.lua', import.meta.url));
 const TASK = fileURLToPath(new URL('../tmux-task.sh', import.meta.url));
+const CLIPBOARD = fileURLToPath(new URL('../hunk-clipboard.mjs', import.meta.url));
+const shellQuoted = text => `'${text.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * Hunk copies a selection with OSC 52 only, which tmux drops when Hunk wraps it for passthrough; where pbcopy
+ * exists (macOS), pipes the Hunk pane's output to scripts/hunk-clipboard.mjs, which hands each copy to that
+ * pbcopy. A pane whose output is piped already keeps its pipe: tmux checks and attaches in one command.
+ * Elsewhere Hunk's own OSC 52 is left to the terminal.
+ */
+export async function attachHunkClipboard(pane, pbcopy = findExecutable('pbcopy'), socket = (process.env.TMUX ?? '').split(',')[0]) {
+  if (!pbcopy || !socket) return;
+  // Shell words, then `#` doubled (pipe-pane expands formats), then one tmux double-quoted string.
+  const command = [process.execPath, CLIPBOARD, pbcopy, socket, pane].map(shellQuoted).join(' ').replaceAll('#', '##');
+  const pipe = `pipe-pane -O -t ${pane} "${command.replace(/[\\"$]/g, '\\$&')}"`;
+  await tmux('-S', socket, 'if-shell', '-F', '-t', pane, '#{pane_pipe}', '', pipe);
+}
 
 async function output(file, args, cwd) {
   return (await run(file, args, { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })).stdout;
@@ -880,6 +896,7 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
     await tmux('set-option', '-p', '-t', id, DIFF_ROOT, root).catch(() => {});
     if (temp) await tmux('set-option', '-p', '-t', id, DIFF_BASE, JSON.stringify({ baseline: temp.baseline, added: temp.added })).catch(() => {});
     await tmux('set-option', '-p', '-t', id, DIFF_OWNER, owner).catch(() => {});
+    await attachHunkClipboard(id).catch(() => {});
     return id;
   }
 

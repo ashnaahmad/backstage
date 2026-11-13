@@ -824,7 +824,27 @@ repository against its own HEAD, including shell edits;
 aliases of one repository count once. A value that is not
 a Git repository is skipped with a single warning.
 Outside tmux, and in print/RPC child processes, it does
-nothing. `HUNK_MCP_DISABLE=1` stops Hunk from starting its
+nothing.
+
+Copying a selection in Hunk (drag, then `y`) reaches the Mac
+clipboard. Hunk copies only with OSC 52, and under tmux it wraps
+that for passthrough, which tmux neither keeps nor forwards with
+the harness's settings and which Terminal.app could not use
+anyway. So where `pbcopy` exists, each Hunk preview's output is
+piped (`tmux pipe-pane -O`) to
+[scripts/hunk-clipboard.mjs](scripts/hunk-clipboard.mjs), which
+picks out the copies and hands their text to that `pbcopy` on
+stdin; everything else is discarded. A pane already piped keeps
+its pipe. Malformed or oversized sequences copy nothing; while
+one copy runs only the newest waits; a `pbcopy` that stalls is
+killed after 5 seconds, and failures show in tmux without the
+copied text. Other platforms keep Hunk's own OSC 52. tmux's
+clipboard settings are unchanged. Hunk panes opened before this
+change have no pipe until reopened. Tests:
+`scripts/tests/hunk-clipboard.test.mjs` (real Hunk, a fake
+`pbcopy`).
+
+`HUNK_MCP_DISABLE=1` stops Hunk from starting its
 background session daemon, so Hunk's agent-session commands
 do not reach this pane. Tests:
 `node --test scripts/tests/diff-pane.test.mjs` and
