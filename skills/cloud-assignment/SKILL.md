@@ -17,13 +17,24 @@ Build the cloud profile deliberately: selected provider credentials, necessary m
 
 For ChatGPT subscription access, use a fresh Pi login in the selected profile. Do not share one rotating OAuth credential between active local and cloud processes. The runner reads its credential from Secrets Manager; do not assume refreshed credentials in a guest are written back. Verify renewal separately before relying on repeated or scheduled subscription runs.
 
+## Assignment and VM lifetime
+
+Keep assignment completion separate from an assistant finishing a turn:
+
+- While the agent is working, keep the VM running.
+- While the same assignment awaits review, clarification or a follow-up, suspend during the pause. A settled reply is not by itself evidence that the assignment is complete.
+- When the assignment meets its agreed completion/review criteria and no follow-up remains pending, verify the durable answer and recoverable changes, then terminate the VM. Do not add a new approval gate where the assignment already authorizes completion.
+- Start a new assignment in a new VM with fresh conversation context. Carry forward relevant outputs, decisions and a concise handoff when needed, rather than the previous conversation wholesale.
+
+Suspension preserves memory and disk, stops compute billing, and still incurs snapshot storage and suspend/resume operation charges. Termination releases the VM; only externally preserved state remains. These Lambda MicroVMs have an eight-hour maximum total lifetime, including suspended time; a shorter configured limit still applies. Suspension does not extend that deadline. Preserve unfinished work before expiry. Resuming an assignment on a replacement VM requires a deliberate handoff/restoration path; the existing cross-VM continuation command is not verified for that purpose.
+
 ## Launch and follow through
 
 Use the installed `cloud_agent` tool for assignments. The standalone CLI manages setup/configuration; it is not a substitute for the assignment tool. Inspect the current tool schema rather than inventing flags. The older `/cloud attach` mirror adapter remains experimental; use durable result retrieval as the recovery path. Cross-VM `/cloud continue` is not a verified restore mechanism.
 
 - Give the remote agent the outcome, constraints, permitted files and meaningful verification. Include enough context to work independently without sending the originating conversation wholesale.
 - Bound runtime and concurrency. For live runner tests, follow the package's test-resource naming/tagging convention and hard maximum duration; select only the resources created by this trial for cleanup. Credits do not remove the need for a duration limit.
-- Distinguish a settled agent turn from a terminated VM. An idle guest can still accept a follow-up. Check lifecycle status and durable output; a counter or successful launch is not an assignment result.
+- Check lifecycle status and durable output against the assignment state above; a counter or successful launch is not an assignment result.
 - Use `cloud_agent` result retrieval, then inspect the actual assistant reply and saved changes. Detach/reconnect tests should retrieve the same persisted session and result from a new client, without relying on the launcher's in-memory state.
 - Preserve both agent-created commits and uncommitted changes. A clean worktree alone does not prove there is nothing to recover. Check the result's recovery reference and preservation error, then verify the downloaded bundle's digest and commit against its metadata. A recorded commit hash alone is not a recovered artifact. Push or PR creation needs authorization for that repository; set `autoPush: false` for an assignment that must not publish.
 
