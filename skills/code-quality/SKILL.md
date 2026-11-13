@@ -36,6 +36,8 @@ Persistence semantics means changes to how data is stored, migrated, recovered o
 
 ## Review and finish
 
+Request a focused test review using the [testing guidance](references/testing.md) when a consequential guarantee spans several layers but existing tests mock their connections, or when a known violation still passes the relevant checks.
+
 Assess correctness and design separately. Give an independent reviewer the outcome, rationale and source access, without the implementer's persuasive explanation. Review can help while checks fail. Verify findings yourself; disagreement with a proposed fix does not disprove the defect. Repair confirmed defects, and return substantial repairs or disputed findings for further investigation. Stop repeating an approach when it produces no new evidence; explain the unresolved question.
 
 Preserve unrelated work. Inspect the final diff, including new files and shell edits, against the accepted outcome and justified additions. Repeat that comparison when work grows substantially or scope changes; revise or remove additions whose justification no longer holds. Follow explicitly selected symlinks to their targets; a reachable link does not authorise unrelated access. For a handoff, use [writing-handoffs](../writing-handoffs/SKILL.md) to report the result, evidence and remaining work. When `quality_status` is available, use it for substantial work: record the current focus, meaningful check results, review findings and unresolved questions as they change. It reports progress; it does not certify completion or gate investigation.
