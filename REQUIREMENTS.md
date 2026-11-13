@@ -70,9 +70,8 @@ after installation rather than assume identical resolution.
   (`https://awscli.amazonaws.com/v2/install.sh`, installs to
   `~/.local/share/aws-cli` with `~/.local/bin/aws`). Homebrew's
   `awscli` 2.39.0 failed here: its Python 3.15 `pyexpat` linked
-  the system `libexpat`, which lacks a required symbol. The AWS
-  MCP proxy runs through `uvx` (observed uv 0.9.26). Setup
-  commands are in [SETUP.md](SETUP.md#aws-cloud-agent-experiment);
+  the system `libexpat`, which lacks a required symbol. No AWS
+  MCP server or broad skill collection is required. Setup commands are in [SETUP.md](SETUP.md#aws-cloud-agent-experiment);
   vendored `pi-cloud-agents/` needs Node >=22.19.
 - **Scheduled cloud tasks (prototype):** pi-tick
   (`gscode1/pi-tick` at `74c9cd7`, MIT) with the harness

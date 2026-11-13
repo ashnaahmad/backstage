@@ -4,11 +4,11 @@ A portable terminal workspace where people and agents can code, write and review
 
 ## Current state
 
-Pi extensions, session navigation, automatic diffs, editable Markdown, quality feedback and cross-provider review form the local workspace. Private Tailscale mobile access adds a paste field and touch controls. Cloud execution and one-shot scheduling are experimental. [Setup](SETUP.md) distinguishes tested paths from remaining checks.
+Pi extensions, session navigation, automatic diffs, editable Markdown, quality feedback and cross-provider review form the local workspace. Private Tailscale mobile access adds a paste field and touch controls. Bounded cloud assignments have passed a personal ChatGPT trial, including durable result retrieval, suspend/resume and Git recovery after termination. Interactive attach, cross-VM continuation, unattended OAuth renewal and one-shot scheduling on the rebuilt runtime remain experimental. [Setup](SETUP.md) distinguishes tested paths from remaining checks.
 
 ## Next steps
 
-- Verify local-to-cloud task handoff, result retrieval and scheduled execution as complete workflows.
+- Use the verified bounded cloud-assignment workflow; assess interactive attach, continuation, unattended renewal and updated scheduled execution when needed.
 - Exercise phone editing and navigation on a physical device, including keyboard behaviour.
 - Use the implemented two-document writing view in daily work; Pi continues running while hidden.
 - Rehearse installation on a clean computer and account using the tracked [requirements](REQUIREMENTS.md).

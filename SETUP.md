@@ -227,50 +227,28 @@ Configure account access, MCP connections and additional skills separately. Cred
 
 ## AWS cloud-agent experiment
 
-The optional cloud experiment uses `eu-north-1`. Follow AWS's
-[Agent Toolkit setup](https://raw.githubusercontent.com/aws/agent-toolkit-for-aws/refs/heads/main/setup-instructions/setup.md),
-with Pi as the only configured agent. Install the AWS CLI with AWS's
-user-local installer rather than Homebrew (see [requirements](REQUIREMENTS.md#optional-features--install-only-when-used)),
-then sign in through the browser and install the skills and MCP server:
+The verified assignment flow needs the AWS CLI, this checkout's runner
+and the focused [cloud-assignment skill](skills/cloud-assignment/SKILL.md).
+It does not require the AWS Agent Toolkit, its broad skill catalogue or
+an AWS MCP server. Keep model login and cloud configuration in a dedicated
+profile as described below.
+
+Install the AWS CLI with AWS's user-local installer (see
+[requirements](REQUIREMENTS.md#optional-features--install-only-when-used)),
+then select your own profile and AWS region. The verified trial used
+`eu-north-1`:
 
 ```sh
 curl -fsSL https://awscli.amazonaws.com/v2/install.sh -o /tmp/aws-install.sh
-bash /tmp/aws-install.sh            # ~/.local/bin/aws; needs ~/.local/bin on PATH
-aws configure set region eu-north-1 --profile backstage
-aws login --region eu-north-1 --profile backstage
-aws configure agent-toolkit --region us-east-1 --profile backstage   # select only Pi
-pi mcp add aws-mcp --env AWS_MCP_PROXY_PROFILES=backstage -- \
-  uvx mcp-proxy-for-aws-cli@latest https://aws-mcp.us-east-1.api.aws/mcp \
-  --metadata AWS_REGION=eu-north-1
-pi mcp list
+bash /tmp/aws-install.sh            # ~/.local/bin/aws; add ~/.local/bin to PATH
+aws configure set region eu-north-1 --profile personal
+aws login --region eu-north-1 --profile personal
 ```
 
-The toolkit service runs only in `us-east-1`; the project's resources
-stay in `eu-north-1`. If `aws login` cannot open a browser from a tmux
-window, run it from a plain shell and open the printed URL with `open`.
-Credentials last 12 hours and refresh for 90 days. The wizard installs
-24 skills in `~/.pi/agent/skills`. Keep that AWS collection outside
-Pi's automatic discovery, as on this machine: after installing the
-toolkit, move its 24 skill directories into
-`~/.pi/skill-collections/aws/`, preserving their relative structure
-and leaving unrelated skills alone. Repeat this check after toolkit
-updates, which may reinstall global copies. For cloud work, start Pi
-with the collection explicitly:
-
-```sh
-pi --skill ~/.pi/skill-collections/aws
-```
-
-This adds AWS skills for that session while retaining the normal
-harness skills. Ordinary Pi sessions omit the AWS catalogue. The
-collection can also be named in a cloud-only project's `.pi/settings.json`
-`skills` array; do not add it back to global settings. Reinstall the
-collection through the toolkit on the next computer; it is upstream
-material, not copied into this repository.
-
-Pi has no automated MCP setup in the toolkit, hence `pi mcp add`
-(user-level `~/.pi/agent/mcp.json`). This scoping changes skills only,
-not the AWS MCP server or credentials.
+If browser sign-in cannot open from tmux, run it from a plain shell.
+Use the region assigned to your AWS project; do not copy another account's
+profile or credentials. Install additional AWS tooling only when a task
+actually needs it.
 
 [pi-cloud-agents/](pi-cloud-agents/) is vendored from
 [AntApper/pi-cloud-agents](https://github.com/AntApper/pi-cloud-agents)
@@ -282,17 +260,55 @@ an older fallback.
 
 The package is not on npm, so run it from source. Its `verify`
 reports some checks (smoke run, network connector) as PASS without
-running them; judge a deployment by a real run instead.
+running them; judge a deployment by a real assignment instead.
+Use [cloud-assignment](skills/cloud-assignment/SKILL.md) for launch,
+result recovery and cleanup. The [personal cloud trial](pi-cloud-agents/docs/evidence/personal-cloud-trial.md)
+verified a real ChatGPT assignment, suspend/resume and recovery after termination.
+
+### Separate cloud profiles
+
+Keep each account's cloud configuration in a dedicated agent directory.
+Start with an empty directory and use Pi's login flow for the intended
+provider. Set both `PI_AGENT_DIR` and `PI_CODING_AGENT_DIR` to that directory
+when running the cloud CLI or extension; do not copy the global auth file
+or settings bundle. Configure `stackName`, `aws.profile`, `aws.region`,
+`image.name`, the exact model, and an explicit `providers.synced` list.
+Rotating OAuth credentials also require `providers.oauthOptIn`.
+
+For a personal ChatGPT trial, select provider `openai`, model
+`gpt-6.1-sol`, and `oauthOptIn: ["openai"]`. Disable Bedrock, use
+`github.mode: "none"` with an owned public repository, and pass
+`autoPush: false` through `cloud_agent`. For `/cloud new`, set
+`defaults.autoPush: false` in the selected cloud configuration. Bound tests
+with `defaults.maxDurationHours: 1` and `defaults.maxConcurrent: 1`.
+Do not use an existing stack that holds credentials from another account.
+A fresh stack provides a separate artifact bucket, execution role and
+Secrets Manager namespace. The test convention is `pi-cloud-agents-test*`
+with the `pi-cloud-agents:test=true` tag; use a short stack name because
+the existing role-name template must fit IAM's 64-character limit.
 
 ```sh
-cd pi-cloud-agents && npm ci && npm run build
-node dist/cli/main.js setup --non-interactive --skip-providers --profile backstage --region eu-north-1
-node dist/cli/main.js config defaults.model.provider anthropic
-node dist/cli/main.js config defaults.model.id claude-sonnet-5-5
-node dist/cli/main.js config providers.synced anthropic
+cd pi-cloud-agents
+npm ci
+npm run build
+# With the selected agent-directory environment already set:
+node dist/cli/main.js setup --non-interactive --config "$PI_AGENT_DIR/pi-cloud-agents.json" --dry-run
+# After reviewing the selected account, stack and providers:
+node dist/cli/main.js setup --non-interactive --config "$PI_AGENT_DIR/pi-cloud-agents.json"
 ```
 
-Configure provider credentials separately. To avoid syncing unrelated local logins, use a dedicated `PI_AGENT_DIR` containing the cloud configuration and only the intended provider configuration. Run the source CLI's `sync` command with that directory and the intended credential environment. Check the selected authentication source: a stored provider login can take precedence over an environment key. If your provider requires additional headers, configure them in `models.json`. Recheck the credential source after `update`, which resyncs local configuration. The `/cloud` extension and `attach` have not been validated in this setup.
+Inspect the selected configuration before `setup`, `sync` or `update`:
+these operations can deploy infrastructure or transfer credentials. Setup
+also syncs the selected providers. `--skip-providers` clears that selection;
+it is not a way to defer sync while retaining it. `sync` reads the selected profile's auth, model settings and instructions;
+it does not package the local skill catalogue. `buildBundle` accepts an
+explicit map of skill files when a task needs them. Keep cloud instructions
+small and task-specific.
+
+Do not run local and cloud processes against the same rotating OAuth
+credential concurrently. The runner currently reads provider secrets;
+it does not save guest token refreshes back to Secrets Manager. Repeated
+or scheduled subscription assignments need a verified renewal strategy.
 
 ### Scheduled one-shot cloud tasks (pi-tick, prototype)
 
@@ -336,16 +352,11 @@ secrets stay in Secrets Manager.
 
 Limits of the prototype:
 
-- **The VM lives until `--timeout-ms`** (default 30 minutes, at most
-  8 hours), not until the agent finishes. The runner's `/v1/status`
-  omits the lifecycle's `suggestedAction`, so the controller never
-  suspends a settled run. The debounced session upload never fires
-  either: `runner/main.ts` waits for a `raw_line` event that
-  `pi-process.ts` never emits. The session reaches S3 in the runner's
-  terminate hook, so there is no live transcript, and `/tick show`
-  has the result only after the VM ends. Fixing both needs a runner
-  image rebuild; test it in a separate image first, since the image
-  is shared with ordinary cloud runs.
+- The shared runner now mirrors session records during a run and publishes
+  idle/suspend policy after preserving a settled turn. The shared result
+  reader can return an answer before VM termination. Existing deployments
+  need the rebuilt image and scheduled helper to gain these changes; the
+  earlier scheduled end-to-end trial does not verify the updated path.
 - **At most once.** Duplicate deliveries are ignored, and a launcher
   that fails after claiming the task is not retried. `/tick show`
   reports `launching` for up to 11 minutes, then `incomplete`.
