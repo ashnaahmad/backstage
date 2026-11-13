@@ -71,8 +71,8 @@ The older `/cloud attach` adapter and cross-VM `/cloud continue` are not verifie
 - Choose checks that could reject plausible wrong behavior. Reproduce regressions when practical;
   distinguish baseline defects, build prerequisites and environment failures from new defects.
 - `npm ci --ignore-scripts` installs locked dependencies. `npm run typecheck`, `npm run lint` and
-  `npm run test:unit -- --maxWorkers=2` cover static checks and units. `npm run test:integration --
-  --maxWorkers=1` exercises the local runner. `npm run build` builds runner/image/controller/CLI;
+  `npm run test:unit -- --maxWorkers=2` cover static checks and units.
+  `npm run test:integration -- --maxWorkers=1` exercises the local runner. `npm run build` builds runner/image/controller/CLI;
   `npm run schemas:gen` regenerates contract schemas. Inspect tests before running them.
 - Use a temporary HOME and minimal environment for standalone checks; exclude ambient cloud/model
   credentials, Pi-directory overrides and TMUX. Explicitly configured synthetic test profiles are fine.
