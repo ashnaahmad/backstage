@@ -154,6 +154,7 @@ and the service starting at login after a real restart
 Pi loads every skill in this checkout's `skills/` through that global `skills` entry, from any directory; `skills/` is not discovered as project skills, so a worktree adds no second copy:
 
 - [code-quality](skills/code-quality/SKILL.md): implementation, testing and review.
+- [writing-handoffs](skills/writing-handoffs/SKILL.md): returning delegated work or preserving context for a fresh session. For Claude Code/Codex discovery, link `~/.agent-skills/writing-handoffs` to this checkout’s `skills/writing-handoffs` directory; recreate the link after migration.
 - [new-model](skills/new-model/SKILL.md): adopt a model release and revise relevant guidance. Link `pi/prompts/new-model.md` into `~/.pi/agent/prompts/new-model.md` for `/new-model <model>`; `/skill:new-model` also works. For Claude Code/Codex discovery, link `~/.agent-skills/new-model` to this checkout’s `skills/new-model` directory; recreate the link after migration.
 - [claude-companion](skills/claude-companion/SKILL.md): a bundled Claude Code wrapper for new and resumed sessions; requires Claude Code, zsh and Python 3.
 - [three-way-conversation](skills/three-way-conversation/SKILL.md): informal conversations between the user and two assistants. Uses the bundled `claude-companion.sh`; requires Claude Code, zsh, Python 3 and private API credentials; see its [transport reference](skills/three-way-conversation/references/transport.md).

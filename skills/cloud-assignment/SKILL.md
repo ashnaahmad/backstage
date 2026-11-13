@@ -24,7 +24,7 @@ Keep assignment completion separate from an assistant finishing a turn:
 - While the agent is working, keep the VM running.
 - While the same assignment awaits review, clarification or a follow-up, suspend during the pause. A settled reply is not by itself evidence that the assignment is complete.
 - When the assignment meets its agreed completion/review criteria and no follow-up remains pending, verify the durable answer and recoverable changes, then terminate the VM. Do not add a new approval gate where the assignment already authorizes completion.
-- Start a new assignment in a new VM with fresh conversation context. Carry forward relevant outputs, decisions and a concise handoff when needed, rather than the previous conversation wholesale.
+- Start a new assignment in a new VM with fresh conversation context. Carry forward relevant outputs, decisions and a [concise handoff](../writing-handoffs/SKILL.md) when needed, rather than the previous conversation wholesale.
 
 Suspension preserves memory and disk, stops compute billing, and still incurs snapshot storage and suspend/resume operation charges. Termination releases the VM; only externally preserved state remains. These Lambda MicroVMs have an eight-hour maximum total lifetime, including suspended time; a shorter configured limit still applies. Suspension does not extend that deadline. Preserve unfinished work before expiry. Resuming an assignment on a replacement VM requires a deliberate handoff/restoration path; the existing cross-VM continuation command is not verified for that purpose.
 
