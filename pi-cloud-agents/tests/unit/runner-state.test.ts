@@ -131,6 +131,54 @@ describe("T2.6 Run State Machine and Persistence", () => {
     expect(storedManifest.status).toBe("completed");
   });
 
+  it.each(["session", "manifest"])(
+    "serializes %s uploads so an older checkpoint cannot overwrite newer data",
+    async (kind) => {
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const target = kind === "session" ? "session.jsonl" : "manifest.json";
+      let active = 0;
+      let writes = 0;
+      const sm = new RunStateMachine({
+        payload: createTestPayload(),
+        storageSink: {
+          getObject: (key) => sink.getObject(key),
+          putObject: async (key, data, type) => {
+            if (key.endsWith(target)) {
+              active++;
+              expect(active).toBe(1);
+              if (++writes === 1) {
+                entered();
+                await gate;
+              }
+              await sink.putObject(key, data, type);
+              active--;
+            } else await sink.putObject(key, data, type);
+          },
+        },
+      });
+      const file = path.join(tempBaseDir, "source.jsonl");
+      fs.writeFileSync(file, "old\n");
+      sm.trackSessionFile(file);
+      const first = kind === "session" ? sm.flushSession() : sm.persistManifest();
+      await started;
+      fs.writeFileSync(file, "new\n");
+      const second =
+        kind === "session" ? sm.flushSession() : sm.updateGit({ lastCommit: "new-head" });
+      release();
+      await Promise.all([first, second]);
+      const stored = (await sink.getObject(`runs/run-20260906-state01/${target}`)).toString();
+      if (kind === "session") expect(stored).toBe("new\n");
+      else expect(JSON.parse(stored).git.lastCommit).toBe("new-head");
+    },
+  );
+
   it("rejects illegal state transitions and throws InvalidStateTransitionError", async () => {
     const payload = createTestPayload();
     const sm = new RunStateMachine({

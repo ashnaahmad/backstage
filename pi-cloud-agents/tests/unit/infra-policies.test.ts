@@ -318,6 +318,38 @@ describe("CloudFormation Core Stack Security Policies (T3.1a)", () => {
     expectOnlyAllowedWildcards(resources);
   });
 
+  it("limits build and guest log writes to the selected image", () => {
+    for (const role of ["BuildRole", "ExecutionRole"]) {
+      const grants = collectAllowStatements(resources)
+        .filter(
+          (s) => s.resource === role && asList(s.statement.Action).includes("logs:PutLogEvents"),
+        )
+        .flatMap((s) => asList(s.statement.Resource));
+      const patterns = grants.map((grant) => {
+        const sub = (grant as unknown as { "Fn::Sub": string })["Fn::Sub"];
+        const arn = sub
+          .replaceAll("${AWS::Region}", "eu-north-1")
+          .replaceAll("${AWS::AccountId}", "123456789012")
+          .replaceAll("${ImageName}", "trial");
+        return new RegExp(
+          `^${arn
+            .split("*")
+            .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join(".*")}$`,
+        );
+      });
+      const canWrite = (name: string) =>
+        patterns.some((p) =>
+          p.test(
+            `arn:aws:logs:eu-north-1:123456789012:log-group:/aws/lambda/microvms/${name}:log-stream:probe`,
+          ),
+        );
+      expect(canWrite("trial")).toBe(true);
+      expect(canWrite("trial-other")).toBe(false);
+      expect(canWrite("unrelated")).toBe(false);
+    }
+  });
+
   it("exports all required outputs", () => {
     expect(outputs.BucketName).toBeDefined();
     expect(outputs.BucketArn).toBeDefined();

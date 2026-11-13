@@ -46,6 +46,7 @@ export class LaunchError extends Error {
 export interface GitRepoInfo {
   remoteUrl: string;
   currentBranch: string;
+  headCommit: string;
   isDirty: boolean;
   dirtyFilesCount: number;
 }
@@ -98,6 +99,11 @@ export function inspectGitRepo(repoDir = process.cwd()): GitRepoInfo {
 
     return {
       remoteUrl,
+      headCommit: execSync("git rev-parse --verify HEAD^{commit}", {
+        cwd: repoDir,
+        encoding: "utf8",
+        timeout: 10000,
+      }).trim(),
       currentBranch: currentBranch || "main",
       isDirty,
       dirtyFilesCount,
@@ -328,7 +334,7 @@ export async function prepareCloudRun(
   }
 
   if (gitInfo.isDirty) {
-    const warnMsg = `Warning: ${gitInfo.dirtyFilesCount} uncommitted local change(s) detected. Cloud agents will clone from '${gitInfo.remoteUrl}' (${gitInfo.currentBranch}).`;
+    const warnMsg = `Warning: ${gitInfo.dirtyFilesCount} uncommitted local change(s) excluded. Cloud agents will fetch '${gitInfo.remoteUrl}' at commit ${gitInfo.headCommit} (${gitInfo.currentBranch}); push that commit before provisioning.`;
     warnings.push(warnMsg);
     options.onProgress?.("git_warning", warnMsg);
   }
@@ -402,7 +408,7 @@ export async function prepareCloudRun(
     },
     repo: {
       url: gitInfo.remoteUrl,
-      ref: gitInfo.currentBranch,
+      ref: gitInfo.headCommit,
       workBranch,
       depth: options.depth || 1,
     },
@@ -425,7 +431,7 @@ export async function prepareCloudRun(
       idleGraceSec: suspendAfterIdleSec,
       suspendAfterIdleSec,
       terminateAfterSuspendedSec,
-      autoPush: options.autoPush ?? true,
+      autoPush: options.autoPush ?? config.defaults.autoPush ?? true,
       maxDurationSec,
     },
     logGroup: `/aws/lambda/microvms/${imageName}`,
@@ -445,7 +451,7 @@ export async function prepareCloudRun(
     imageVersion,
     repo: {
       url: gitInfo.remoteUrl,
-      ref: gitInfo.currentBranch,
+      ref: gitInfo.headCommit,
       workBranch,
     },
     model: {

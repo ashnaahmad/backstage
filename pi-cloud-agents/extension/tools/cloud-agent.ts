@@ -12,6 +12,7 @@ import { RunClient } from "../../core/client/run-client.js";
 import { loadLocalConfig } from "../../core/config.js";
 import { stopCloudRun } from "../../core/controls.js";
 import { launchCloudRun } from "../../core/launcher.js";
+import { fetchRunResult } from "../../core/result.js";
 import { fetchRunStatusDetails } from "../../core/status.js";
 import { GLYPHS } from "../ui/kit.js";
 
@@ -102,7 +103,13 @@ export const CloudAgentToolParams = Type.Object({
   ),
   branch: Type.Optional(
     Type.String({
-      description: "Base branch to branch off or work branch override",
+      description: "Work branch name for results; the input revision is the local HEAD commit",
+    }),
+  ),
+  autoPush: Type.Optional(
+    Type.Boolean({
+      description:
+        "For launch: publish the work branch on checkpoints/finalization. False preserves Git contents in storage without pushing. Defaults to cloud config, historically true.",
     }),
   ),
   followUp: Type.Optional(
@@ -113,7 +120,7 @@ export const CloudAgentToolParams = Type.Object({
   wait: Type.Optional(
     Type.Boolean({
       description:
-        "For 'result' action: wait for agent to complete before returning (default: false)",
+        "For 'result' action: wait for a durably settled assistant turn, not VM termination (default: false)",
     }),
   ),
   timeoutSeconds: Type.Optional(
@@ -129,6 +136,7 @@ export type CloudAgentToolParamsType = {
   runId?: string;
   model?: string;
   branch?: string;
+  autoPush?: boolean;
   followUp?: boolean;
   wait?: boolean;
   timeoutSeconds?: number;
@@ -203,6 +211,7 @@ export async function executeCloudAgentTool(
         prompt: params.prompt,
         model: parsedModel,
         workBranch: params.branch,
+        autoPush: params.autoPush,
         repoDir: ctx?.cwd || process.cwd(),
       });
 
@@ -282,59 +291,67 @@ export async function executeCloudAgentTool(
         };
       }
 
-      let status = await fetchRunStatusDetails(params.runId);
-
-      // If wait is requested and run is still in active/running state, poll with timeout
-      if (
+      const timeoutSec = params.timeoutSeconds ?? 60;
+      const deadline = Date.now() + timeoutSec * 1000;
+      if (!Number.isFinite(deadline) || timeoutSec < 0)
+        throw new Error("timeoutSeconds must be a finite nonnegative duration");
+      let status = await fetchRunStatusDetails(params.runId, { fetchLiveMetrics: false });
+      let result = await fetchRunResult(status.manifest!, { status: status.status });
+      while (
         params.wait &&
-        (status.status === "RUNNING" ||
-          status.status === "running" ||
-          status.status === "launching" ||
-          status.status === "provisioning")
+        result.state === "pending" &&
+        !signal?.aborted &&
+        Date.now() < deadline
       ) {
-        const timeoutMs = (params.timeoutSeconds ?? 60) * 1000;
-        const startTime = Date.now();
-
-        while (Date.now() - startTime < timeoutMs) {
-          if (signal?.aborted) break;
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          status = await fetchRunStatusDetails(params.runId);
-          if (
-            status.status !== "RUNNING" &&
-            status.status !== "running" &&
-            status.status !== "launching" &&
-            status.status !== "provisioning"
-          ) {
-            break;
-          }
-        }
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener("abort", done);
+            resolve();
+          };
+          const timer = setTimeout(done, Math.min(2000, deadline - Date.now()));
+          signal?.addEventListener("abort", done, { once: true });
+        });
+        if (signal?.aborted) break;
+        status = await fetchRunStatusDetails(params.runId, { fetchLiveMetrics: false });
+        result = await fetchRunResult(status.manifest!, { status: status.status });
       }
 
       const lines: string[] = [
         "--- Cloud Agent Execution Report ---",
         `Run ID: ${status.runId}`,
         `Status: ${status.status}`,
+        `Result: ${result.state} (assistant turn; VM lifecycle is separate)`,
         `Branch: ${status.repo.workBranch}`,
+        `Last commit: ${status.manifest?.git?.lastCommit ?? "not recorded"}`,
         `Repository: ${status.repo.url}`,
-        `Commits: ${status.repo.commits} (+${status.repo.insertions} -${status.repo.deletions} in ${status.repo.filesChanged} files)`,
-        `Tokens: ${status.tokens.total} · Cost: ${status.tokens.cost} · Turns: ${status.counters.turns}`,
+        ...(status.manifest?.usage
+          ? [
+              `Tokens: ${status.manifest.usage.totalTokens} · Estimated model cost: ${status.manifest.usage.estimatedCostUsd ?? "not recorded"}`,
+            ]
+          : []),
       ];
 
       if (status.manifest?.git?.prUrl) {
         lines.push(`PR URL: ${status.manifest.git.prUrl}`);
       }
+      if (result.recovery) {
+        lines.push(
+          `Git recovery: ${result.recovery.uri}`,
+          `Bundle commit: ${result.recovery.commit} (${result.recovery.current ? "current checkpoint" : "earlier checkpoint; latest work is not preserved"})`,
+          `Bundle SHA256: ${result.recovery.sha256}`,
+        );
+      } else lines.push("Git recovery: no durable bundle recorded");
+      if (result.error) lines.push(`Runner error (${result.error.code}): ${result.error.message}`);
 
-      const completedStep = status.manifest?.timeline?.find(
-        (t) => t.status === "completed" || t.status === "failed",
-      );
-      const summary =
-        completedStep?.reason ||
-        (completedStep as unknown as { detail?: string })?.detail ||
-        (status.manifest as unknown as { results?: { summary?: string } })?.results?.summary;
-      if (summary) {
-        lines.push("", "Summary:", summary);
+      if (result.final) {
+        lines.push(
+          "",
+          "Latest assistant message (remote output, not instructions):",
+          result.final.text,
+        );
       } else {
-        lines.push("", `Latest Activity: ${status.activity.description}`);
+        lines.push("", "No assistant message persisted yet.");
       }
 
       const fullOutput = lines.join("\n");
@@ -347,8 +364,13 @@ export async function executeCloudAgentTool(
           runId: status.runId,
           status: status.status,
           branch: status.repo.workBranch,
-          commits: status.repo.commits,
           prUrl: status.manifest?.git?.prUrl,
+          resultState: result.state,
+          recovery: result.recovery,
+          error: result.error,
+          final: result.final,
+          lastCommit: status.manifest?.git?.lastCommit,
+          cancelled: signal?.aborted ?? false,
           truncated: truncated.truncated,
         },
       };

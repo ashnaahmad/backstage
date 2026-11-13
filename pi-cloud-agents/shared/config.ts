@@ -58,6 +58,8 @@ export const LocalDefaultsSchema = z.object({
     id: "claude-sonnet-4-6",
   }),
   maxDurationHours: z.number().int().positive().max(8).default(4),
+  /** Omitted preserves the historical default: publish the work branch. */
+  autoPush: z.boolean().optional(),
   idle: IdlePolicyMinutesSchema.default({
     suspendAfterMin: 15,
     terminateAfterSuspendedMin: 120,

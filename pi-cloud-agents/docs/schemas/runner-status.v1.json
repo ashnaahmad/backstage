@@ -24,6 +24,71 @@
           "type": "string",
           "format": "date-time"
         },
+        "agentState": {
+          "type": "string",
+          "enum": [
+            "starting",
+            "streaming",
+            "tool",
+            "idle",
+            "stopped",
+            "recovering",
+            "failed",
+            "completed",
+            "terminated"
+          ]
+        },
+        "attachedClientsCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "idleSince": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy": {
+          "type": "object",
+          "properties": {
+            "idleGraceSec": {
+              "type": "number",
+              "minimum": 0
+            },
+            "suspendAfterIdleSec": {
+              "type": "number",
+              "minimum": 0
+            },
+            "terminateAfterSuspendedSec": {
+              "type": "number",
+              "minimum": 0
+            },
+            "maxDurationSec": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "idleGraceSec",
+            "suspendAfterIdleSec",
+            "terminateAfterSuspendedSec",
+            "maxDurationSec"
+          ],
+          "additionalProperties": false
+        },
+        "suggestedAction": {
+          "type": "string",
+          "enum": [
+            "none",
+            "suspend",
+            "terminate"
+          ]
+        },
         "pi": {
           "type": "object",
           "properties": {

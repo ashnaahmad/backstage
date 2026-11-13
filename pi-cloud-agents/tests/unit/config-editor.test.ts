@@ -51,6 +51,11 @@ describe("T4.11 Config Editor & /cloud config", () => {
     });
   });
 
+  it("persists the no-push policy through the supported /cloud config command", async () => {
+    await handleCloudConfigCommand(["defaults.autoPush", "false"]);
+    expect(loadLocalConfig({ customDir: tempDir }).defaults.autoPush).toBe(false);
+  });
+
   describe("setConfigValue & Validation", () => {
     it("updates numeric fields with bounds enforcement", () => {
       const config = { ...DEFAULT_LOCAL_CONFIG };

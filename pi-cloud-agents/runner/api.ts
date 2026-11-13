@@ -147,6 +147,11 @@ export class RunnerApiServer {
     this.isAgentStreaming = streaming;
   }
 
+  /** Long-lived mirror channels only; HTTP/controller polls are not attached users. */
+  public getMirrorConnectionsCount(): number {
+    return this.activeSseResponses.size + this.wsBridge.getConnectedClientsCount();
+  }
+
   public getActiveConnectionsCount(): number {
     return (
       this.activeSockets.size +

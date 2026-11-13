@@ -54,47 +54,4 @@ export interface LaunchRecord {
   error?: string;
 }
 
-export interface FinalMessage {
-  text: string;
-  timestamp?: string;
-  stopReason?: string;
-  /** False when the last assistant turn was a tool call or error: the agent had not finished. */
-  complete: boolean;
-}
-
-/**
- * Returns the last assistant message in a Pi session JSONL, or null when the agent has not
- * answered. Malformed lines are skipped: the mirror can end mid-flush.
- */
-export function finalAssistantMessage(sessionJsonl: string): FinalMessage | null {
-  const lines = sessionJsonl.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]?.trim();
-    if (!line) continue;
-    let entry: {
-      type?: string;
-      timestamp?: string;
-      message?: { role?: string; stopReason?: string; content?: unknown };
-    };
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
-    const content = Array.isArray(entry.message.content) ? entry.message.content : [];
-    const text = content
-      .filter(
-        (part): part is { type: "text"; text: string } =>
-          typeof part === "object" &&
-          part !== null &&
-          (part as { type?: unknown }).type === "text" &&
-          typeof (part as { text?: unknown }).text === "string",
-      )
-      .map((part) => part.text)
-      .join("\n");
-    const stopReason = entry.message.stopReason;
-    return { text, timestamp: entry.timestamp, stopReason, complete: stopReason === "stop" };
-  }
-  return null;
-}
+export { type FinalMessage, finalAssistantMessage } from "../core/result.js";

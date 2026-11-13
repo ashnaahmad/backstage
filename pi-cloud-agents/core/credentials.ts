@@ -393,6 +393,9 @@ export function validateCredentialEntry(
     }
 
     const cred: OAuthCredential = {
+      // OAuth providers own renewal metadata (for example ChatGPT's issued clientId).
+      // Preserve it after validating the common credential fields above.
+      ...record,
       type: "oauth",
       refresh: record.refresh,
       access: record.access,

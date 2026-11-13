@@ -156,48 +156,82 @@ export async function prepareWorkspace(
     fs.statSync(path.join(workingDirectory, ".git")).isDirectory();
 
   if (!isGitRepo) {
-    const cloneArgs: string[] = ["clone"];
-
-    if (payload.repo.depth && payload.repo.depth > 0) {
-      cloneArgs.push("--depth", String(payload.repo.depth));
-    }
-
-    if (payload.repo.ref) {
-      cloneArgs.push("--branch", payload.repo.ref);
-    }
-
-    cloneArgs.push(payload.repo.url, workingDirectory);
-
-    logger?.info?.(`Executing: git ${cloneArgs.join(" ")}`);
-
-    try {
-      await execFileAsync("git", cloneArgs, {
+    const pinnedCommit =
+      payload.repo.ref && /^[0-9a-f]{40}$/i.test(payload.repo.ref) ? payload.repo.ref : undefined;
+    if (pinnedCommit) {
+      // Fetch the resolved revision, not the branch's value at provisioning time.
+      await execFileAsync("git", ["init", workingDirectory], {
         env: effectiveEnv,
         signal: params.abortSignal,
       });
-    } catch (err) {
-      // If branch clone failed because ref is a commit SHA rather than branch/tag, fallback to full/shallow clone then checkout
-      if (payload.repo.ref) {
-        logger?.warn?.(
-          `git clone --branch ${payload.repo.ref} failed, retrying plain clone + checkout SHA`,
-        );
-        const fallbackArgs = ["clone", payload.repo.url, workingDirectory];
-        if (payload.repo.depth && payload.repo.depth > 0) {
-          fallbackArgs.splice(1, 0, "--depth", String(payload.repo.depth));
-        }
-        await execFileAsync("git", fallbackArgs, {
+      await execFileAsync("git", ["remote", "add", "origin", payload.repo.url], {
+        cwd: workingDirectory,
+        env: effectiveEnv,
+        signal: params.abortSignal,
+      });
+      const fetchArgs = ["fetch", "origin", pinnedCommit];
+      if (payload.repo.depth) fetchArgs.push("--depth", String(payload.repo.depth));
+      try {
+        await execFileAsync("git", fetchArgs, {
+          cwd: workingDirectory,
           env: effectiveEnv,
           signal: params.abortSignal,
+          timeout: 120000,
         });
-        await execFileAsync("git", ["checkout", payload.repo.ref], {
+        await execFileAsync("git", ["checkout", "--detach", pinnedCommit], {
           cwd: workingDirectory,
           env: effectiveEnv,
           signal: params.abortSignal,
         });
-      } else {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger?.error?.(`git clone failed: ${msg}`);
-        throw new Error(`Failed to clone repository '${payload.repo.url}': ${msg}`);
+      } catch (err) {
+        throw new Error(
+          `Cannot fetch pinned commit '${pinnedCommit}'. Push it to origin before launching. No alternate revision was selected. ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } else {
+      const cloneArgs: string[] = ["clone"];
+
+      if (payload.repo.depth && payload.repo.depth > 0) {
+        cloneArgs.push("--depth", String(payload.repo.depth));
+      }
+
+      if (payload.repo.ref) {
+        cloneArgs.push("--branch", payload.repo.ref);
+      }
+
+      cloneArgs.push(payload.repo.url, workingDirectory);
+
+      logger?.info?.(`Executing: git ${cloneArgs.join(" ")}`);
+
+      try {
+        await execFileAsync("git", cloneArgs, {
+          env: effectiveEnv,
+          signal: params.abortSignal,
+        });
+      } catch (err) {
+        // If branch clone failed because ref is a commit SHA rather than branch/tag, fallback to full/shallow clone then checkout
+        if (payload.repo.ref) {
+          logger?.warn?.(
+            `git clone --branch ${payload.repo.ref} failed, retrying plain clone + checkout SHA`,
+          );
+          const fallbackArgs = ["clone", payload.repo.url, workingDirectory];
+          if (payload.repo.depth && payload.repo.depth > 0) {
+            fallbackArgs.splice(1, 0, "--depth", String(payload.repo.depth));
+          }
+          await execFileAsync("git", fallbackArgs, {
+            env: effectiveEnv,
+            signal: params.abortSignal,
+          });
+          await execFileAsync("git", ["checkout", payload.repo.ref], {
+            cwd: workingDirectory,
+            env: effectiveEnv,
+            signal: params.abortSignal,
+          });
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger?.error?.(`git clone failed: ${msg}`);
+          throw new Error(`Failed to clone repository '${payload.repo.url}': ${msg}`);
+        }
       }
     }
   }
@@ -230,6 +264,18 @@ export async function prepareWorkspace(
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error?.(`Failed to checkout work branch '${workBranch}': ${msg}`);
     throw new Error(`Failed to checkout work branch '${workBranch}': ${msg}`);
+  }
+
+  if (payload.repo.ref && /^[0-9a-f]{40}$/i.test(payload.repo.ref)) {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: workingDirectory,
+      env: effectiveEnv,
+    });
+    if (stdout.trim() !== payload.repo.ref.toLowerCase()) {
+      throw new Error(
+        `Workspace HEAD does not match pinned commit '${payload.repo.ref}'; refusing to run different code.`,
+      );
+    }
   }
 
   // 5. Configure git committer identity

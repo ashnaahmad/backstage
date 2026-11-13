@@ -29,6 +29,15 @@ import { DEFAULT_STACK_NAME } from "./sync.js";
 
 export const getRunStatus = fetchRunStatusDetails;
 
+/** A dead/suspended VM overrides a nonterminal saved runner state, not a recorded outcome. */
+export function effectiveRunStatus(saved: string, vmState?: string): string {
+  if (["completed", "failed", "terminated"].includes(saved.toLowerCase())) return saved;
+  const state = vmState?.toLowerCase();
+  if (state === "terminated" || state === "suspended") return state;
+  if (state === "running" && saved === "suspended") return "running";
+  return saved;
+}
+
 export interface FetchRunStatusOptions {
   config?: LocalConfig;
   s3Client?: S3Client;
@@ -274,26 +283,14 @@ export async function fetchRunStatusDetails(
         }),
       );
       microvm = vmRes?.microvmId ? { microvmId: vmRes.microvmId, state: vmRes.state } : undefined;
+      // The guest cannot populate its proxy endpoint; AWS owns this connection detail.
+      if (vmRes?.endpoint) manifest = { ...manifest, endpoint: vmRes.endpoint };
     } catch {
       // Best effort
     }
   }
 
-  let effectiveStatus: string = manifest.status;
-  if (microvm?.state) {
-    const vmState = microvm.state.toLowerCase();
-    if (
-      effectiveStatus !== "completed" &&
-      effectiveStatus !== "failed" &&
-      effectiveStatus !== "terminated"
-    ) {
-      if (vmState === "suspended") {
-        effectiveStatus = "suspended";
-      } else if (vmState === "running" && effectiveStatus === "suspended") {
-        effectiveStatus = "running";
-      }
-    }
-  }
+  let effectiveStatus = effectiveRunStatus(manifest.status, microvm?.state);
 
   // 5. Attempt live /v1/status and /v1/metrics fetch if running/idle
   let liveStatus: RunnerStatus | undefined;

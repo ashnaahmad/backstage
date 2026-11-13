@@ -61,6 +61,15 @@ The `LaunchPayload` is constructed locally by the launch command (`/cloud new`) 
 
 ---
 
+### Revision fidelity
+
+New immediate launches resolve local `HEAD` to a full commit SHA in `repo.ref`
+when preparing the launch. Moving the source branch afterwards does not change the assignment.
+The runner fetches that SHA explicitly (including shallow runs) and checks HEAD before running
+install commands. An unavailable/unpushed commit fails provisioning with push guidance; it never
+falls back to the current remote branch. Uncommitted local edits remain excluded, with a warning.
+Legacy branch/tag payloads remain accepted and retain their existing clone semantics.
+
 ## 4. Run Manifest (v1)
 
 JSON Schema: [`docs/schemas/run-manifest.v1.json`](schemas/run-manifest.v1.json)
@@ -77,6 +86,26 @@ launching ──> running <───> idle ───> completed
                  │
                  └───> failed / terminated
 ```
+
+A settled assistant turn checkpoints and flushes the session before publishing `idle`.
+`idle` is resumable, not task/VM completion: the next `agent_start` publishes `running`.
+Checkpoint/finalize records and optionally pushes the actual HEAD even on a clean tree, without
+creating an extra commit. Before publication it preserves a self-contained Git bundle under
+`runs/<runId>/artifacts/git-<sha256>.bundle`. Git push remains best-effort with a bounded timeout;
+failures are recorded in `manifest.error` (`INTERNAL_ERROR`, `details.stage: "git_push"`).
+`git.lastCommit` is neither proof that a push succeeded nor a recovery artifact by itself.
+`git.recovery` records the bundle's storage key, exact commit and SHA256 only after upload.
+A later failed upload retains the earlier immutable reference rather than claiming it contains
+newer work. Preservation failures use existing `manifest.error` semantics (`INTERNAL_ERROR`,
+`details.stage: "git_preservation"`); explicit completion becomes `failed` when Git preservation
+fails, including when a configured workspace has disappeared. Intentionally omitted Git is not a missing-workspace failure. Hypervisor termination still records `terminated` with the error. Results expose the
+recovery URI/commit/checksum, whether it covers the current checkpoint, and any runner error.
+Shallow sources are deepened by a bounded read-only fetch of the source ref, then the bundle is
+verified in an empty Git repository. If that fails, preservation is reported failed, not complete.
+The bundle contains Git objects reachable from HEAD, not a workspace tar or runner-owned
+credential/config directories. Like any Git export, it includes committed repository content and history.
+Session mirroring does not depend on Git changes and is scheduled from RPC events while working.
+RPC event frames themselves are never treated as session JSONL entries.
 
 ### Schema Fields
 | Field | Type | Description |
@@ -146,6 +175,13 @@ Returns live runner status, agent state, uptime, active connection count, and la
   }
 }
 ```
+
+The provisioned runner also supplies optional backwards-compatible lifecycle fields:
+- `agentState`: assistant activity (`streaming`, `tool`, `idle`, etc.), distinct from VM/run state.
+- `attachedClientsCount`: mirror SSE/WS channels plus explicitly registered clients, not ordinary HTTP/controller connections.
+- `idleSince`: ISO timestamp or null. After an observed mirror disconnect, idle grace begins conservatively when the runner next observes no clients.
+- `policy`: `idleGraceSec`, `suspendAfterIdleSec`, `terminateAfterSuspendedSec`, `maxDurationSec`.
+- `suggestedAction`: `none`, `suspend`, or `terminate`. Settling a turn does not suggest terminate.
 
 ### 6.3 `GET /v1/manifest`
 Returns the current `RunManifest` for this run.
@@ -236,6 +272,52 @@ Provides a low-latency bidirectional channel directly into the in-VM pi process 
   - VM -> Client: `message_update`, `tool_execution_start`, `tool_execution_end`, `error`, `extension_ui_request`.
 
 ---
+
+## Durable assignment results
+
+`cloud_agent(action="result")` reads the persisted session even when the VM is unreachable or
+terminated. It returns the latest assistant text and recorded commit/branch/PR metadata, not a
+manifest timeline reason disguised as the answer. Output is truncated by the tool's existing
+limits. Scheduled task results share the same parser and completion semantics.
+
+- `pending`: no durably settled answer yet. An older answer followed by a new user/tool message is not complete.
+- `settled`: a final assistant message (`stopReason: "stop"`) and saved idle/suspended/completed/terminated runner evidence. A terminal VM cannot promote an earlier answer over saved `running` evidence of newer work. This does not mean the work is independently verified.
+- `incomplete`: a terminal lifecycle without a completed assistant answer (including error/abort/tool-call endings).
+
+`wait=true` polls until settlement, terminal/incomplete state, cancellation or the finite caller
+supplied timeout (default 60 seconds). VM state and result state are separate. A VM reported
+terminated overrides a stale nonterminal manifest. Missing transcripts return pending/incomplete;
+storage permission/service errors remain errors rather than being reported as missing answers.
+Old runner images that never publish idle cannot provide pre-termination settlement evidence.
+
+### Publication policy and Git recovery
+
+`cloud_agent(action="launch", autoPush=false, ...)` disables runner-owned pushes. `/cloud new`
+uses the same launch policy from `/cloud config defaults.autoPush false`. A per-run tool option
+overrides the configuration value. If neither is set, the historical default remains true.
+No-push does not disable auto-committing dirty work or preserving Git bundles; a clean/read-only
+no-push turn does not publish a remote branch either. No GitHub credential is needed for bundle
+recovery. A push failure does not prevent independent preservation.
+
+Download the exact `recovery.uri` with your authorized storage client, verify its SHA256 against
+`recovery.sha256`, and restore without the source repository or VM:
+
+```sh
+# work.bundle is the downloaded object; first compare shasum -a 256 work.bundle to the report.
+git init recovered
+git -C recovered fetch /absolute/path/work.bundle HEAD
+git -C recovered checkout --detach FETCH_HEAD
+# Compare git -C recovered rev-parse HEAD to recovery.commit before inspecting files.
+```
+
+Only `recovery.current: true` covers the latest checkpoint. If false, the earlier artifact can
+still be restored at its recorded commit, but read the error before stopping a live run. Upload
+or deepening failure may require retrying the checkpoint while the VM/source is still available.
+Archives expire under the existing per-run storage retention policy.
+
+Known existing limitation: `/cloud continue` does not restore the prior session/workspace and
+currently prepares a new launch from the local checkout. It is not verified conversation
+continuation; this bounded assignment round trip does not implement the separate 8-hour restore path.
 
 ## 8. Error Responses & Codes
 

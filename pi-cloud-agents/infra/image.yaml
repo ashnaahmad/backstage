@@ -142,7 +142,6 @@ Resources:
                   - "lambda:TerminateMicrovm"
                   - "lambda:CreateMicrovmAuthToken"
                 Resource:
-                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm:*"
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${ImageName}"
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${ImageName}:*"
               - Sid: S3ManifestAndControllerStorage

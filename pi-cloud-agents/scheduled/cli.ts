@@ -20,6 +20,9 @@ import {
 import { AwsClientFactory } from "../core/aws/clients.js";
 import { loadLocalConfig } from "../core/config.js";
 import { prepareCloudRun } from "../core/launcher.js";
+import { describeRecovery, describeResult } from "../core/result.js";
+import { effectiveRunStatus } from "../core/status.js";
+import type { RunManifest } from "../shared/protocol.js";
 import {
   type LaunchRecord,
   type ScheduledTask,
@@ -29,11 +32,7 @@ import {
 } from "./task.js";
 
 export const DEFAULT_LAUNCHER_STACK = "pi-tick-aws";
-/**
- * The run's VM lives until this limit: the runner's /v1/status does not report the lifecycle's
- * suggested action, so the controller never suspends a settled run (see SETUP.md). The session
- * mirror reaches S3 in the terminate hook.
- */
+/** Hard lifetime bound; settled interactive turns use the existing idle/suspend policy. */
 export const DEFAULT_MAX_DURATION_SEC = 1800;
 const MAX_DURATION_CAP_SEC = 8 * 3600;
 
@@ -252,7 +251,7 @@ export async function result(input: { runId: string; jobId?: string }) {
   const stack = await launcherStack(ctx);
   const task = await readJson<ScheduledTask>(ctx, stack.bucket, taskKey(input.runId));
   const launch = await readJson<LaunchRecord>(ctx, stack.bucket, launchKey(input.runId));
-  const manifest = await readJson<{ status?: string; timeline?: unknown[]; microvmId?: string }>(
+  const manifest = await readJson<RunManifest>(
     ctx,
     stack.bucket,
     `runs/${input.runId}/manifest.json`,
@@ -291,6 +290,15 @@ export async function result(input: { runId: string; jobId?: string }) {
   }
 
   const launchState = describeLaunch(launch);
+  const final = session ? finalAssistantMessage(session) : null;
+  const resultState = describeResult(
+    manifest?.status ?? "launching",
+    final,
+    effectiveRunStatus(
+      manifest?.status ?? "launching",
+      typeof vm?.state === "string" ? vm.state : undefined,
+    ),
+  );
 
   return {
     runId: input.runId,
@@ -299,9 +307,13 @@ export async function result(input: { runId: string; jobId?: string }) {
     requestedAt: task?.requestedAt,
     schedulePresent,
     launch,
-    run: manifest ? { status: manifest.status, timeline: manifest.timeline } : null,
+    run: manifest
+      ? { status: manifest.status, timeline: manifest.timeline, error: manifest.error }
+      : null,
+    recovery: manifest ? describeRecovery(manifest, stack.bucket) : null,
     vm,
-    final: session ? finalAssistantMessage(session) : null,
+    resultState,
+    final: final ? { ...final, complete: resultState === "settled" } : null,
   };
 }
 

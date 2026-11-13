@@ -78,6 +78,9 @@
               "maximum": 8,
               "default": 4
             },
+            "autoPush": {
+              "type": "boolean"
+            },
             "idle": {
               "type": "object",
               "properties": {

@@ -91,6 +91,37 @@ describe("T2.3 Workspace Preparation", () => {
     };
   }
 
+  it("checks out the pinned commit even after the remote branch moves with a shallow clone", async () => {
+    const seedDir = path.join(tempBaseDir, "seed-repo");
+    const original = execSync("git rev-parse HEAD", { cwd: seedDir, encoding: "utf8" }).trim();
+    fs.writeFileSync(path.join(seedDir, "later.txt"), "not part of assignment\n");
+    execSync("git add . && git commit -m later && git push origin main", {
+      cwd: seedDir,
+      stdio: "ignore",
+    });
+    const payload = createTestPayload();
+    payload.repo.ref = original;
+    payload.repo.depth = 1;
+    const result = await prepareWorkspace({ payload, workingDirectory: workDir });
+    expect(result.initialCommit).toBe(original);
+    expect(execSync("git rev-parse HEAD", { cwd: workDir, encoding: "utf8" }).trim()).toBe(
+      original,
+    );
+    expect(fs.existsSync(path.join(workDir, "later.txt"))).toBe(false);
+  });
+
+  it("refuses an unpushed pinned commit rather than substituting the remote branch", async () => {
+    const seedDir = path.join(tempBaseDir, "seed-repo");
+    fs.writeFileSync(path.join(seedDir, "local-only.txt"), "unpushed\n");
+    execSync("git add . && git commit -m unpushed", { cwd: seedDir, stdio: "ignore" });
+    const payload = createTestPayload();
+    payload.repo.ref = execSync("git rev-parse HEAD", { cwd: seedDir, encoding: "utf8" }).trim();
+    await expect(prepareWorkspace({ payload, workingDirectory: workDir })).rejects.toThrow(
+      "No alternate revision was selected",
+    );
+    expect(fs.existsSync(path.join(workDir, "README.md"))).toBe(false);
+  });
+
   it("ensures GIT_ASKPASS helper script exists and is executable", () => {
     const askPassPath = ensureGitAskPassScript();
     expect(fs.existsSync(askPassPath)).toBe(true);

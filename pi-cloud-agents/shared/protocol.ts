@@ -148,6 +148,13 @@ export type ManifestUsage = z.infer<typeof ManifestUsageSchema>;
 export const ManifestGitSchema = z.object({
   workBranch: z.string().min(1),
   lastCommit: z.string().optional(),
+  recovery: z
+    .object({
+      key: z.string().min(1),
+      commit: z.string().regex(/^[0-9a-f]{40}$/),
+      sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    })
+    .optional(),
   prUrl: z.string().url().optional(),
 });
 
@@ -218,6 +225,30 @@ export const RunnerStatusSchema = z.object({
   uptimeSeconds: z.number().nonnegative(),
   activeConnections: z.number().int().nonnegative(),
   lastActivityAt: z.string().datetime(),
+  agentState: z
+    .enum([
+      "starting",
+      "streaming",
+      "tool",
+      "idle",
+      "stopped",
+      "recovering",
+      "failed",
+      "completed",
+      "terminated",
+    ])
+    .optional(),
+  attachedClientsCount: z.number().int().nonnegative().optional(),
+  idleSince: z.string().datetime().nullable().optional(),
+  policy: z
+    .object({
+      idleGraceSec: z.number().nonnegative(),
+      suspendAfterIdleSec: z.number().nonnegative(),
+      terminateAfterSuspendedSec: z.number().nonnegative(),
+      maxDurationSec: z.number().nonnegative(),
+    })
+    .optional(),
+  suggestedAction: z.enum(["none", "suspend", "terminate"]).optional(),
   pi: z.object({
     running: z.boolean(),
     pid: z.number().int().positive().optional(),

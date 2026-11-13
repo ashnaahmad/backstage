@@ -3,6 +3,7 @@ import {
   GetMicrovmCommand,
   LambdaMicrovmsClient,
   ListMicrovmsCommand,
+  type MicrovmItem,
   SuspendMicrovmCommand,
   TerminateMicrovmCommand,
 } from "@aws-sdk/client-lambda-microvms";
@@ -40,6 +41,40 @@ describe("T3.5 Controller Lambda", () => {
     microvmsMock.reset();
     s3Mock.reset();
     secretsMock.reset();
+  });
+
+  it("does not contact VMs from another image or with missing ownership", async () => {
+    microvmsMock.on(ListMicrovmsCommand).resolves({
+      items: [
+        { microvmId: "unknown", state: "RUNNING" } as unknown as MicrovmItem,
+        {
+          microvmId: "similar",
+          state: "RUNNING",
+          imageVersion: "1.0",
+          startedAt: new Date(),
+          imageArn:
+            "arn:aws:lambda:us-east-1:123456789012:microvm-image:pi-cloud-agents-runner-other",
+        },
+        {
+          microvmId: "stack-match",
+          state: "RUNNING",
+          imageVersion: "1.0",
+          startedAt: new Date(),
+          imageArn: "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-stack-other-runner",
+        },
+      ],
+    });
+    secretsMock.on(ListSecretsCommand).resolves({ SecretList: [] });
+    s3Mock.on(PutObjectCommand).resolves({});
+    const summary = await executeControllerRun({
+      stackName: "test-stack",
+      bucketName: "test-bucket",
+    });
+    expect(summary.runningCount).toBe(0);
+    expect(microvmsMock.commandCalls(GetMicrovmCommand)).toHaveLength(0);
+    expect(microvmsMock.commandCalls(CreateMicrovmAuthTokenCommand)).toHaveLength(0);
+    expect(microvmsMock.commandCalls(SuspendMicrovmCommand)).toHaveLength(0);
+    expect(microvmsMock.commandCalls(TerminateMicrovmCommand)).toHaveLength(0);
   });
 
   it("keeps active agent alive via HTTP GET /v1/status ping and never suspends", async () => {

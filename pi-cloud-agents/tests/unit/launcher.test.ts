@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -135,6 +136,9 @@ describe("Cloud Agent Launcher (T4.4)", () => {
 
       expect(result.runId).toMatch(RUN_ID_REGEX);
       expect(result.manifest.status).toBe("launching");
+      expect(result.manifest.repo.ref).toBe(
+        execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      );
       expect(result.workBranch).toBe(`pi-cloud/${result.runId}`);
       expect(result.endpoint).toBeDefined();
     });
@@ -319,6 +323,17 @@ describe("Cloud Agent Launcher (T4.4)", () => {
       s3Mock.on(PutObjectCommand).resolves({});
       microvmsMock.on(RunMicrovmCommand).rejects(new Error("stop after RunMicrovm"));
 
+      const defaultPreparation = await prepareCloudRun({ config: mockConfig, clientFactory });
+      expect(defaultPreparation.prepared.payload.options.autoPush).toBe(true);
+      const noPushConfig = { ...mockConfig, defaults: { ...mockConfig.defaults, autoPush: false } };
+      expect(
+        (await prepareCloudRun({ config: noPushConfig, clientFactory })).prepared.payload.options
+          .autoPush,
+      ).toBe(false);
+      expect(
+        (await prepareCloudRun({ config: noPushConfig, clientFactory, autoPush: true })).prepared
+          .payload.options.autoPush,
+      ).toBe(true);
       const { prepared } = await prepareCloudRun({
         config: mockConfig,
         clientFactory,

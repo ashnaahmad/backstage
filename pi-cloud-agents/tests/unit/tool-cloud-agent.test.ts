@@ -159,7 +159,7 @@ describe("T4.9 Cloud Agent Tool for Local LLM", () => {
     });
 
     it("executes launch action successfully", async () => {
-      vi.spyOn(launcherModule, "launchCloudRun").mockResolvedValueOnce({
+      const launchSpy = vi.spyOn(launcherModule, "launchCloudRun").mockResolvedValueOnce({
         runId: "run-20260906-launch123",
         microvmId: "mvm-launch123",
         endpoint: "mvm-launch123.microvm.us-east-1.amazonaws.com",
@@ -180,6 +180,7 @@ describe("T4.9 Cloud Agent Tool for Local LLM", () => {
         action: "launch",
         prompt: "Refactor auth middleware to use JWT",
         model: "anthropic/claude-sonnet-4-5",
+        autoPush: false,
       });
 
       expect(result.details.action).toBe("launch");
@@ -188,6 +189,8 @@ describe("T4.9 Cloud Agent Tool for Local LLM", () => {
       expect(result.content[0]?.text).toContain("Cloud agent launched successfully.");
       expect(result.content[0]?.text).toContain("run-20260906-launch123");
       expect(result.content[0]?.text).toContain("Next steps:");
+      expect(launchSpy).toHaveBeenCalledWith(expect.objectContaining({ autoPush: false }));
+      launchSpy.mockRestore();
     });
 
     it("validates missing runId on status, result, steer, stop actions", async () => {
@@ -213,6 +216,15 @@ describe("T4.9 Cloud Agent Tool for Local LLM", () => {
     it("executes result action and includes PR URL and summary", async () => {
       const completedManifest: RunManifest = {
         ...activeManifest,
+        git: {
+          ...activeManifest.git!,
+          lastCommit: "a".repeat(40),
+          recovery: {
+            key: `runs/${activeManifest.runId}/artifacts/git-${"b".repeat(64)}.bundle`,
+            commit: "a".repeat(40),
+            sha256: "b".repeat(64),
+          },
+        },
         status: "completed",
         timeline: [
           { status: "launching", at: "2026-09-06T12:00:00.000Z" },
@@ -230,6 +242,22 @@ describe("T4.9 Cloud Agent Tool for Local LLM", () => {
         ) as unknown as GetObjectCommandOutput["Body"],
       });
 
+      s3Mock
+        .on(GetObjectCommand, { Key: `runs/${completedManifest.runId}/session.jsonl` })
+        .resolves({
+          Body: mockS3Body(
+            JSON.stringify({
+              type: "message",
+              message: {
+                role: "assistant",
+                stopReason: "stop",
+                content: [
+                  { type: "text", text: "Actual assistant handoff, not a timeline summary" },
+                ],
+              },
+            }),
+          ) as unknown as GetObjectCommandOutput["Body"],
+        });
       const result = await executeCloudAgentTool("call-4", {
         action: "result",
         runId: "run-20260906-7f3a2c",
@@ -240,7 +268,157 @@ describe("T4.9 Cloud Agent Tool for Local LLM", () => {
       expect(result.details.prUrl).toBe("https://github.com/acme/api/pull/42");
       expect(result.content[0]?.text).toContain("Cloud Agent Execution Report");
       expect(result.content[0]?.text).toContain("PR URL: https://github.com/acme/api/pull/42");
-      expect(result.content[0]?.text).toContain("Added 12 new unit tests");
+      expect(result.content[0]?.text).toContain("Actual assistant handoff");
+      expect(result.content[0]?.text).not.toContain("Added 12 new unit tests");
+      expect(result.details.resultState).toBe("settled");
+      expect(result.details.recovery).toMatchObject({ current: true, commit: "a".repeat(40) });
+      expect(result.content[0]?.text).toContain("Git recovery: s3://pi-cloud-agents-bucket/runs/");
+    });
+
+    it("returns a durable settled answer without waiting for VM termination", async () => {
+      const idleManifest = { ...activeManifest, status: "idle" };
+      s3Mock.on(GetObjectCommand).resolves({
+        Body: mockS3Body(JSON.stringify(idleManifest)) as unknown as GetObjectCommandOutput["Body"],
+      });
+      s3Mock.on(GetObjectCommand, { Key: `runs/${activeManifest.runId}/session.jsonl` }).resolves({
+        Body: mockS3Body(
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "Durable read-only result" }],
+            },
+          }),
+        ) as unknown as GetObjectCommandOutput["Body"],
+      });
+      const result = await executeCloudAgentTool("idle-result", {
+        action: "result",
+        runId: activeManifest.runId,
+        wait: true,
+        timeoutSeconds: 0,
+      });
+      expect(result.details.status).toBe("idle");
+      expect(result.details.resultState).toBe("settled");
+      expect(result.content[0]?.text).toContain("Durable read-only result");
+    });
+
+    it("does not call a running or terminated incomplete turn settled", async () => {
+      s3Mock.on(GetObjectCommand, { Key: `runs/${activeManifest.runId}/session.jsonl` }).resolves({
+        Body: mockS3Body(
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              stopReason: "toolUse",
+              content: [{ type: "text", text: "Still working" }],
+            },
+          }),
+        ) as unknown as GetObjectCommandOutput["Body"],
+      });
+      const pending = await executeCloudAgentTool("pending", {
+        action: "result",
+        runId: activeManifest.runId,
+        wait: true,
+        timeoutSeconds: 0,
+      });
+      expect(pending.details.resultState).toBe("pending");
+      s3Mock.on(GetObjectCommand, { Key: `runs/${activeManifest.runId}/manifest.json` }).resolves({
+        Body: mockS3Body(
+          JSON.stringify({ ...activeManifest, status: "terminated" }),
+        ) as unknown as GetObjectCommandOutput["Body"],
+      });
+      const terminated = await executeCloudAgentTool("terminated", {
+        action: "result",
+        runId: activeManifest.runId,
+      });
+      expect(terminated.details.resultState).toBe("incomplete");
+      expect(terminated.details.status).toBe("terminated");
+    });
+
+    it("stops waiting when AWS reports termination even if the saved manifest is still running", async () => {
+      microvmsMock.on(GetMicrovmCommand).resolves({
+        microvmId: activeManifest.microvmId,
+        state: "TERMINATED",
+      } as unknown as GetMicrovmCommandOutput);
+      s3Mock
+        .on(GetObjectCommand, { Key: `runs/${activeManifest.runId}/session.jsonl` })
+        .rejects(Object.assign(new Error("not uploaded"), { name: "NoSuchKey" }));
+      const result = await executeCloudAgentTool("lost-hook", {
+        action: "result",
+        runId: activeManifest.runId,
+        wait: true,
+        timeoutSeconds: 0,
+      });
+      expect(result.details.status).toBe("terminated");
+      expect(result.details.resultState).toBe("incomplete");
+    });
+
+    it("keeps an earlier answer as incomplete evidence when a newer running assignment loses its VM", async () => {
+      microvmsMock.on(GetMicrovmCommand).resolves({
+        microvmId: activeManifest.microvmId,
+        state: "TERMINATED",
+      } as unknown as GetMicrovmCommandOutput);
+      // Saved running is newer than this transcript: the follow-up's user/message
+      // records had not reached storage before abrupt VM loss.
+      s3Mock.on(GetObjectCommand, { Key: `runs/${activeManifest.runId}/session.jsonl` }).resolves({
+        Body: mockS3Body(
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "Answer to FIRST assignment" }],
+            },
+          }),
+        ) as unknown as GetObjectCommandOutput["Body"],
+      });
+      const result = await executeCloudAgentTool("interrupted-followup", {
+        action: "result",
+        runId: activeManifest.runId,
+      });
+      expect(result.details.status).toBe("terminated");
+      expect(result.details.resultState).toBe("incomplete");
+      expect(result.details.final).toMatchObject({
+        text: "Answer to FIRST assignment",
+        complete: false,
+      });
+    });
+
+    it("waits for durable settlement rather than VM termination", async () => {
+      s3Mock
+        .on(GetObjectCommand, { Key: `runs/${activeManifest.runId}/manifest.json` })
+        .resolvesOnce({
+          Body: mockS3Body(
+            JSON.stringify(activeManifest),
+          ) as unknown as GetObjectCommandOutput["Body"],
+        })
+        .resolves({
+          Body: mockS3Body(
+            JSON.stringify({ ...activeManifest, status: "idle" }),
+          ) as unknown as GetObjectCommandOutput["Body"],
+        });
+      s3Mock.on(GetObjectCommand, { Key: `runs/${activeManifest.runId}/session.jsonl` }).resolves({
+        Body: mockS3Body(
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: "Settled after polling" }],
+            },
+          }),
+        ) as unknown as GetObjectCommandOutput["Body"],
+      });
+      const result = await executeCloudAgentTool("poll", {
+        action: "result",
+        runId: activeManifest.runId,
+        wait: true,
+        timeoutSeconds: 0.05,
+      });
+      expect(result.details.status).toBe("idle");
+      expect(result.details.resultState).toBe("settled");
+      expect(result.content[0]?.text).toContain("Settled after polling");
     });
 
     it("executes steer action with steer mode and follow-up mode", async () => {

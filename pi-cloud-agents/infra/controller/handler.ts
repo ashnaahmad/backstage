@@ -152,11 +152,9 @@ export async function executeControllerRun(
       items: (page) => page.items,
     });
     microvms = allVms.filter((vm) => {
-      if (!vm.imageArn) return true;
-      return (
-        vm.imageArn.includes(imageName) ||
-        (vm.imageArn.includes(stackName) && vm.imageArn.includes("runner"))
-      );
+      // An absent or similar image name is not evidence of ownership.
+      const arnParts = vm.imageArn?.split(":");
+      return arnParts?.[5] === "microvm-image" && arnParts[6] === imageName;
     });
   } catch (err: unknown) {
     const errorMsg = (err as Error)?.message || String(err);

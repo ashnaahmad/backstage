@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describeRecovery } from "../../core/result.js";
 import { LifecyclePolicyManager } from "../../runner/lifecycle.js";
 import { PiProcessManager } from "../../runner/pi-process.js";
 import { RunStateMachine } from "../../runner/state.js";
@@ -96,6 +97,8 @@ describe("T2.7 Lifecycle Policy & Idle Management", () => {
   });
 
   it("computes idle duration and transitions suggestedAction to suspend after idleGraceSec", async () => {
+    await stateMachine.transitionTo("running");
+    await stateMachine.transitionTo("idle");
     const lifecycle = new LifecyclePolicyManager(stateMachine, undefined, {
       idleGraceSec: 300,
       suspendAfterIdleSec: 600,
@@ -128,6 +131,47 @@ describe("T2.7 Lifecycle Policy & Idle Management", () => {
     lifecycle.recordClientPoll("client-2");
     expect(lifecycle.getIdleSince()).toBeNull();
     expect(lifecycle.getSuggestedAction()).toBe("none");
+  });
+
+  it("does not suspend during preservation or publish idle over a newer working turn", async () => {
+    await stateMachine.transitionTo("running");
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let blockedOnce = false;
+    const pi = new PiProcessManager({ workingDirectory: repoDir, sessionDir });
+    const lifecycle = new LifecyclePolicyManager(stateMachine, pi, {
+      repoPath: repoDir,
+      autoPush: false,
+      idleGraceSec: 0,
+      suspendAfterIdleSec: 0,
+      gitRunner: async (args, cwd, timeout, env) => {
+        if (args[0] === "bundle" && args[1] === "create" && !blockedOnce) {
+          blockedOnce = true;
+          entered();
+          await gate;
+        }
+        const result = await execFileAsync("git", args, { cwd, timeout, env: env ?? process.env });
+        return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
+      },
+    });
+    pi.emit("agent_start");
+    pi.emit("agent_settled");
+    await blocked;
+    expect(stateMachine.getStatus()).toBe("running");
+    expect(lifecycle.getSuggestedAction()).toBe("none");
+    pi.emit("agent_start");
+    release();
+    await lifecycle.createCheckpointCommit();
+    expect(stateMachine.getStatus()).toBe("running");
+    expect(lifecycle.getAgentState()).toBe("streaming");
+    pi.emit("agent_settled");
+    await expect.poll(() => stateMachine.getStatus()).toBe("idle");
   });
 
   it("suggests terminate when run is in completed or terminated state or exceeds max duration", async () => {
@@ -182,6 +226,223 @@ describe("T2.7 Lifecycle Policy & Idle Management", () => {
     expect(lifecycle.getAgentState()).toBe("idle");
 
     await piProcess.stop();
+  });
+
+  it("persists a clean read-only settled turn without terminating the run", async () => {
+    await stateMachine.transitionTo("running");
+    const sessionFile = path.join(sessionDir, "readonly.jsonl");
+    const transcript = `${JSON.stringify({ type: "message", id: "answer", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Read-only answer" }] } })}\n`;
+    fs.writeFileSync(sessionFile, transcript);
+    stateMachine.trackSessionFile(sessionFile);
+    const pi = new PiProcessManager({ workingDirectory: repoDir, sessionDir });
+    const lifecycle = new LifecyclePolicyManager(stateMachine, pi, {
+      repoPath: repoDir,
+      autoPush: false,
+    });
+    pi.emit("agent_start");
+    pi.emit("agent_settled");
+    await expect
+      .poll(
+        () =>
+          JSON.parse(
+            fs.readFileSync(
+              path.join(sinkDir, `runs/${samplePayload.runId}/manifest.json`),
+              "utf8",
+            ),
+          ).status,
+      )
+      .toBe("idle");
+    expect(
+      fs.readFileSync(path.join(sinkDir, `runs/${samplePayload.runId}/session.jsonl`), "utf8"),
+    ).toBe(transcript);
+    expect(lifecycle.getSuggestedAction()).not.toBe("terminate");
+    pi.emit("agent_start");
+    await expect.poll(() => stateMachine.getStatus()).toBe("running");
+  });
+
+  it("pushes an agent's own commit on a clean tree during finalization", async () => {
+    const remote = path.join(tmpDir, "remote.git");
+    await execFileAsync("git", ["init", "--bare", remote]);
+    await execFileAsync("git", ["remote", "add", "origin", remote], { cwd: repoDir });
+    fs.writeFileSync(path.join(repoDir, "self-committed.txt"), "agent work\n");
+    await execFileAsync("git", ["add", "."], { cwd: repoDir });
+    await execFileAsync("git", ["commit", "-m", "agent's own commit"], { cwd: repoDir });
+    const head = (
+      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repoDir })
+    ).stdout.trim();
+    await stateMachine.transitionTo("running");
+    const lifecycle = new LifecyclePolicyManager(stateMachine, undefined, {
+      repoPath: repoDir,
+      autoPush: true,
+    });
+    await lifecycle.finalize();
+    expect(
+      (
+        await execFileAsync("git", ["rev-parse", "refs/heads/pi-cloud/run-life01"], { cwd: remote })
+      ).stdout.trim(),
+    ).toBe(head);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(sinkDir, `runs/${samplePayload.runId}/manifest.json`), "utf8"),
+      ).git.lastCommit,
+    ).toBe(head);
+  });
+
+  it.each([false, true])(
+    "recovers shallow committed and dirty work after deleting all repositories when autoPush=%s",
+    async (autoPush) => {
+      const remote = path.join(tmpDir, "remote.git");
+      const shallow = path.join(tmpDir, "shallow");
+      await execFileAsync("git", ["init", "--bare", remote]);
+      await execFileAsync("git", ["remote", "add", "origin", remote], { cwd: repoDir });
+      fs.writeFileSync(path.join(repoDir, "base.txt"), "second base commit\n");
+      await execFileAsync("git", ["add", "."], { cwd: repoDir });
+      await execFileAsync("git", ["commit", "-m", "second base"], { cwd: repoDir });
+      const source = (
+        await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repoDir })
+      ).stdout.trim();
+      await execFileAsync("git", ["push", "origin", "HEAD:main"], { cwd: repoDir });
+      // Publication, when requested, fails. Preservation must still work.
+      fs.writeFileSync(path.join(remote, "hooks/pre-receive"), "#!/bin/sh\nexit 1\n", {
+        mode: 0o755,
+      });
+      await execFileAsync("git", [
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        "main",
+        `file://${remote}`,
+        shallow,
+      ]);
+      await execFileAsync("git", ["config", "user.name", "Test Agent"], { cwd: shallow });
+      await execFileAsync("git", ["config", "user.email", "test@example.com"], { cwd: shallow });
+      await execFileAsync("git", ["checkout", "-b", samplePayload.repo.workBranch], {
+        cwd: shallow,
+      });
+      fs.writeFileSync(path.join(shallow, "self-committed.txt"), "agent's committed contents\n");
+      await execFileAsync("git", ["add", "."], { cwd: shallow });
+      await execFileAsync("git", ["commit", "-m", "agent self-commit"], { cwd: shallow });
+      fs.writeFileSync(path.join(shallow, "dirty.txt"), "uncommitted work must survive too\n");
+      await stateMachine.transitionTo("running");
+      const lifecycle = new LifecyclePolicyManager(
+        stateMachine,
+        undefined,
+        { repoPath: shallow, autoPush },
+        undefined,
+        { ...samplePayload, repo: { ...samplePayload.repo, ref: source } },
+      );
+      await lifecycle.createCheckpointCommit();
+      // Exercise a clean/read-only checkpoint as well: false must never publish even HEAD.
+      await lifecycle.handleTerminate();
+      const saved = JSON.parse(
+        fs.readFileSync(path.join(sinkDir, `runs/${samplePayload.runId}/manifest.json`), "utf8"),
+      );
+      expect(saved.status).toBe("terminated");
+      expect(saved.git.recovery.commit).toBe(saved.git.lastCommit);
+      if (autoPush) expect(saved.error.details.stage).toBe("git_push");
+      else expect(saved.error).toBeUndefined();
+      await expect(
+        execFileAsync(
+          "git",
+          ["show-ref", "--verify", `refs/heads/${samplePayload.repo.workBranch}`],
+          { cwd: remote },
+        ),
+      ).rejects.toThrow();
+      fs.rmSync(shallow, { recursive: true });
+      fs.rmSync(repoDir, { recursive: true });
+      fs.rmSync(remote, { recursive: true });
+      const restored = path.join(tmpDir, "restored");
+      await execFileAsync("git", ["init", restored]);
+      await execFileAsync("git", ["fetch", path.join(sinkDir, saved.git.recovery.key), "HEAD"], {
+        cwd: restored,
+      });
+      await execFileAsync("git", ["checkout", "--detach", "FETCH_HEAD"], { cwd: restored });
+      expect(fs.readFileSync(path.join(restored, "self-committed.txt"), "utf8")).toBe(
+        "agent's committed contents\n",
+      );
+      expect(fs.readFileSync(path.join(restored, "dirty.txt"), "utf8")).toBe(
+        "uncommitted work must survive too\n",
+      );
+      expect(
+        (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: restored })).stdout.trim(),
+      ).toBe(saved.git.lastCommit);
+      expect(
+        (
+          await execFileAsync("git", ["rev-list", "--count", "HEAD"], { cwd: restored })
+        ).stdout.trim(),
+      ).toBe("4");
+    },
+  );
+
+  it("does not advertise an earlier bundle as containing a later HEAD after upload failure", async () => {
+    const storageSink = new LocalStorageSink({ baseDir: sinkDir });
+    let fail = false;
+    const sm = new RunStateMachine({
+      payload: samplePayload,
+      storageSink: {
+        getObject: (key) => storageSink.getObject(key),
+        putObject: async (key, data, type) => {
+          if (fail && key.endsWith(".bundle")) throw new Error("artifact upload unavailable");
+          await storageSink.putObject(key, data, type);
+        },
+      },
+    });
+    await sm.transitionTo("running");
+    const lifecycle = new LifecyclePolicyManager(sm, undefined, {
+      repoPath: repoDir,
+      autoPush: false,
+    });
+    await lifecycle.createCheckpointCommit();
+    const previous = sm.getManifest().git!.recovery!;
+    const previousBytes = await storageSink.getObject(previous.key);
+    fs.writeFileSync(path.join(repoDir, "new-work.txt"), "not in the older artifact\n");
+    fail = true;
+    await lifecycle.finalize();
+    const saved = JSON.parse(
+      (await storageSink.getObject(`runs/${samplePayload.runId}/manifest.json`)).toString(),
+    );
+    expect(saved.status).toBe("failed");
+    expect(saved.error).toMatchObject({
+      code: "INTERNAL_ERROR",
+      details: { stage: "git_preservation" },
+    });
+    expect(saved.git.lastCommit).not.toBe(previous.commit);
+    expect(saved.git.recovery).toEqual(previous);
+    expect(await storageSink.getObject(previous.key)).toEqual(previousBytes);
+  });
+
+  it("reports disappeared configured workspace as failed preservation while retaining the earlier artifact", async () => {
+    await stateMachine.transitionTo("running");
+    const lifecycle = new LifecyclePolicyManager(stateMachine, undefined, {
+      repoPath: repoDir,
+      autoPush: false,
+    });
+    await lifecycle.createCheckpointCommit();
+    const previous = stateMachine.getManifest().git!.recovery!;
+    const previousBytes = fs.readFileSync(path.join(sinkDir, previous.key));
+    fs.writeFileSync(path.join(repoDir, "README.md"), "new work not yet preserved\n");
+    fs.rmSync(repoDir, { recursive: true });
+    await lifecycle.finalize();
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(sinkDir, `runs/${samplePayload.runId}/manifest.json`), "utf8"),
+    );
+    expect(saved.status).toBe("failed");
+    expect(saved.error).toMatchObject({
+      code: "INTERNAL_ERROR",
+      details: { stage: "git_preservation" },
+    });
+    expect(saved.git.recovery).toEqual(previous);
+    expect(describeRecovery(saved, "test-bucket")?.current).toBe(false);
+    expect(fs.readFileSync(path.join(sinkDir, previous.key))).toEqual(previousBytes);
+  });
+
+  it("allows a deliberately omitted Git dependency without inventing a preservation failure", async () => {
+    await stateMachine.transitionTo("running");
+    const lifecycle = new LifecyclePolicyManager(stateMachine);
+    await lifecycle.finalize();
+    expect(stateMachine.getStatus()).toBe("completed");
+    expect(stateMachine.getManifest().error).toBeUndefined();
   });
 
   it("handles suspend, resume, and terminate hooks cleanly", async () => {

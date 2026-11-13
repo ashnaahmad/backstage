@@ -4,6 +4,7 @@
  * token usage tracking, and storage synchronization (manifest and debounced session mirroring).
  */
 
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import {
   type LaunchPayload,
@@ -119,6 +120,8 @@ export class RunStateMachine {
   private sessionDirty = false;
   private sessionDebounceTimer: NodeJS.Timeout | null = null;
   private trackedSessionFilePath?: string;
+  private sessionWrite: Promise<void> = Promise.resolve();
+  private manifestWrite: Promise<void> = Promise.resolve();
 
   constructor(options: RunStateMachineOptions) {
     this.storageSink = options.storageSink;
@@ -182,11 +185,6 @@ export class RunStateMachine {
       `Transitioned run '${this.manifest.runId}' state: ${from} -> ${to}${reason ? ` (${reason})` : ""}`,
     );
 
-    // Guaranteed ordering: if transitioning to a terminal or suspended state, flush session BEFORE saving manifest
-    if (to === "suspended" || to === "completed" || to === "failed" || to === "terminated") {
-      await this.flushSession();
-    }
-
     await this.persistManifest();
 
     return this.manifest;
@@ -243,6 +241,7 @@ export class RunStateMachine {
     this.manifest.git = {
       workBranch: git.workBranch ?? currentGit.workBranch,
       lastCommit: git.lastCommit ?? currentGit.lastCommit,
+      recovery: git.recovery ?? currentGit.recovery,
       prUrl: git.prUrl ?? currentGit.prUrl,
     };
     this.manifest.updatedAt = new Date().toISOString();
@@ -256,6 +255,27 @@ export class RunStateMachine {
     if (entryId && entryId.trim().length > 0) {
       this.manifest.lastEntryId = entryId;
     }
+  }
+
+  /** Publish immutable Git contents before advertising their recovery reference. */
+  public async preserveGitBundle(bundle: Buffer, commit: string): Promise<void> {
+    const sha256 = createHash("sha256").update(bundle).digest("hex");
+    const key = `runs/${this.manifest.runId}/artifacts/git-${sha256}.bundle`;
+    await this.retryOperation(
+      () => this.storageSink.putObject(key, bundle, "application/octet-stream"),
+      3,
+    );
+    this.clearErrorForStage("git_preservation");
+    await this.updateGit({ recovery: { key, commit, sha256 } });
+  }
+
+  /** Clear only a recovered operation's error, never an unrelated run failure. */
+  public clearErrorForStage(stage: string): void {
+    if (
+      this.manifest.error?.code === "INTERNAL_ERROR" &&
+      (this.manifest.error.details as { stage?: string } | undefined)?.stage === stage
+    )
+      this.manifest.error = undefined;
   }
 
   /**
@@ -292,6 +312,11 @@ export class RunStateMachine {
     this.scheduleDebouncedSessionFlush();
   }
 
+  /** RPC events signal file changes; they are not session JSONL records. */
+  public scheduleSessionMirror(): void {
+    this.scheduleDebouncedSessionFlush();
+  }
+
   private scheduleDebouncedSessionFlush(): void {
     if (this.sessionDebounceTimer) {
       return;
@@ -311,7 +336,16 @@ export class RunStateMachine {
    * Immediately flushes session content to storage sink.
    * Reads from tracked local session file if available, otherwise writes accumulated buffer.
    */
-  public async flushSession(): Promise<void> {
+  public flushSession(): Promise<void> {
+    const next = this.sessionWrite.then(
+      () => this.writeSession(),
+      () => this.writeSession(),
+    );
+    this.sessionWrite = next;
+    return next;
+  }
+
+  private async writeSession(): Promise<void> {
     if (this.sessionDebounceTimer) {
       clearTimeout(this.sessionDebounceTimer);
       this.sessionDebounceTimer = null;
@@ -364,7 +398,21 @@ export class RunStateMachine {
   /**
    * Persists the current RunManifest to the storage sink.
    */
-  public async persistManifest(): Promise<void> {
+  public persistManifest(): Promise<void> {
+    const next = this.manifestWrite.then(
+      () => this.writeManifest(),
+      () => this.writeManifest(),
+    );
+    this.manifestWrite = next;
+    return next;
+  }
+
+  private async writeManifest(): Promise<void> {
+    // All writers (including metrics/Git updates) must publish durable transcript first
+    // when advertising a settled, suspended or terminal state.
+    if (["idle", "suspended", "completed", "failed", "terminated"].includes(this.manifest.status)) {
+      await this.flushSession();
+    }
     const validated = RunManifestSchema.parse(this.manifest);
     const serialized = encodeRunManifest(validated);
 

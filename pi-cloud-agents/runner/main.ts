@@ -244,8 +244,8 @@ export class RunnerServer {
         this.piProcess.on("session_file", (file: string) => {
           this.stateMachine?.trackSessionFile(file);
         });
-        this.piProcess.on("raw_line", (line: string) => {
-          this.stateMachine?.appendSessionChunk(`${line}\n`);
+        this.piProcess.on("event", () => {
+          this.stateMachine?.scheduleSessionMirror();
         });
 
         // 5. Initialize MetricsCollector
@@ -271,6 +271,7 @@ export class RunnerServer {
             repoPath: this.workspaceResult.workingDirectory,
             env: this.workspaceResult.effectiveEnv,
             gitRunner: this.options.customGitRunner,
+            mirrorConnectionsCount: () => this.apiServer?.getMirrorConnectionsCount() ?? 0,
           },
           this.logger,
           payload,
@@ -292,6 +293,7 @@ export class RunnerServer {
           getStatus: async (): Promise<RunnerStatus> => {
             const summary = this.lifecycleManager?.getStatusSummary();
             return {
+              ...summary,
               status: this.stateMachine?.getStatus() ?? "running",
               runId: payload.runId,
               uptimeSeconds: summary?.uptimeSeconds ?? 0,

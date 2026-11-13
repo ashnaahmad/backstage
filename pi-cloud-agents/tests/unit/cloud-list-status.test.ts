@@ -269,6 +269,28 @@ describe("T4.6 /cloud list & /cloud status", () => {
   });
 
   describe("fetchRunStatusDetails and formatRunStatusCard", () => {
+    it.each([undefined, "stale.example.invalid"])(
+      "resolves the current AWS endpoint when the saved endpoint is %s",
+      async (endpoint) => {
+        s3Mock.on(GetObjectCommand).resolves({
+          Body: mockS3Body(
+            JSON.stringify({ ...sampleManifestRunning, endpoint }),
+          ) as unknown as never,
+        });
+        microvmsMock.on(GetMicrovmCommand).resolves({
+          microvmId: sampleManifestRunning.microvmId,
+          state: "RUNNING",
+          endpoint: "current.example.invalid",
+        });
+        const details = await fetchRunStatusDetails(sampleManifestRunning.runId, {
+          bucket: "test-bucket",
+          s3Client: new S3Client({ region: "us-east-1" }),
+          microvmsClient: new LambdaMicrovmsClient({ region: "us-east-1" }),
+          fetchLiveMetrics: false,
+        });
+        expect(details.manifest?.endpoint).toBe("current.example.invalid");
+      },
+    );
     it("fetches run status details from S3 and renders detail card matching §2.3 spec", async () => {
       s3Mock.on(ListObjectsV2Command).resolves({
         Contents: [{ Key: "runs/run-20260906-7f3a2c/manifest.json" }],

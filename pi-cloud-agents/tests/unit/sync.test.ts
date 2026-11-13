@@ -113,6 +113,37 @@ describe("T4.13 Cloud Sync (pi config bundle & credentials)", () => {
     expect(savedConfig.providers.syncedAt).toBe(result.syncedAt);
   });
 
+  it("preserves provider-owned OAuth renewal metadata through file-based sync", async () => {
+    saveLocalConfig({
+      ...DEFAULT_LOCAL_CONFIG,
+      providers: { synced: ["openai"], oauthOptIn: ["openai"], bedrockRole: false },
+    });
+    const credential = {
+      type: "oauth",
+      access: "trial-access-token",
+      refresh: "trial-refresh-token",
+      expires: 9999999999999,
+      clientId: "issued-client-id",
+      scopes: ["chatgpt.tokens.use.direct"],
+    };
+    fs.writeFileSync(
+      path.join(tempDir, "auth.json"),
+      JSON.stringify({
+        openai: credential,
+        unrelated: { type: "api_key", key: "unrelated-private-key" },
+      }),
+    );
+    await syncPiConfig({ piAgentDir: tempDir });
+    const calls = smMock.commandCalls(CreateSecretCommand);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0]!.args[0].input.SecretString!)).toEqual(credential);
+    for (const call of s3Mock.commandCalls(PutObjectCommand)) {
+      const tar = Buffer.from(call.args[0].input.Body as Buffer).toString();
+      for (const secret of [credential.access, credential.refresh, "unrelated-private-key"])
+        expect(tar).not.toContain(secret);
+    }
+  });
+
   it("gates OAuth sync based on oauthOptIn list", async () => {
     const config: LocalConfig = {
       ...DEFAULT_LOCAL_CONFIG,

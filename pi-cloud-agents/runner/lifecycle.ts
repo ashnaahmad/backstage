@@ -9,7 +9,8 @@ import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { promisify } from "node:util";
-import type { LaunchPayload, RunStatus } from "../shared/protocol.js";
+import { type LaunchPayload, ProtocolErrorCode, type RunStatus } from "../shared/protocol.js";
+import { createRecoveryBundle } from "./git-bundle.js";
 import type { Logger } from "./logger.js";
 import type { PiProcessManager } from "./pi-process.js";
 import type { RunStateMachine } from "./state.js";
@@ -47,6 +48,7 @@ export interface LifecyclePolicyOptions {
   repoPath?: string;
   env?: NodeJS.ProcessEnv;
   clock?: () => number;
+  mirrorConnectionsCount?: () => number;
   gitRunner?: (
     args: string[],
     cwd?: string,
@@ -86,6 +88,8 @@ export class LifecyclePolicyManager extends EventEmitter {
   private readonly clock: () => number;
   private readonly repoPath?: string;
   private readonly env?: NodeJS.ProcessEnv;
+  private readonly mirrorConnectionsCount: () => number;
+  private hadAttachedClients = false;
 
   private readonly idleGraceSec: number;
   private readonly suspendAfterIdleSec: number;
@@ -113,6 +117,8 @@ export class LifecyclePolicyManager extends EventEmitter {
   private checkpointIndex = 1;
   private maxDurationWarningEmitted = false;
   private commitLock: Promise<unknown> = Promise.resolve();
+  private checkpointPreserved = true;
+  private readonly sourceRef?: string;
 
   constructor(
     stateMachine: RunStateMachine,
@@ -129,6 +135,7 @@ export class LifecyclePolicyManager extends EventEmitter {
     this.repoPath = options.repoPath;
     this.env = options.env;
     this.customGitRunner = options.gitRunner;
+    this.sourceRef = payload?.repo.ref ?? stateMachine.getManifest().repo.ref;
 
     const payloadOpts = payload?.options;
     this.idleGraceSec = options.idleGraceSec ?? payloadOpts?.idleGraceSec ?? DEFAULT_IDLE_GRACE_SEC;
@@ -151,6 +158,7 @@ export class LifecyclePolicyManager extends EventEmitter {
     this.startTime = now;
     this.lastActivityTime = now;
 
+    this.mirrorConnectionsCount = options.mirrorConnectionsCount ?? (() => 0);
     this.bindProcessEvents();
   }
 
@@ -162,6 +170,11 @@ export class LifecyclePolicyManager extends EventEmitter {
       this.agentActivityState = "streaming";
       this.idleStartTime = null;
       this.recordActivity();
+      if (this.stateMachine.getStatus() === "idle") {
+        this.stateMachine
+          .transitionTo("running", "Assistant started working")
+          .catch((err) => this.logger?.warn?.(`Could not persist working state: ${String(err)}`));
+      }
     });
 
     pi.on("turn_start", () => {
@@ -203,11 +216,21 @@ export class LifecyclePolicyManager extends EventEmitter {
       }
 
       // Auto-commit WIP changes to workBranch
-      this.autoCommitWip(`checkpoint ${this.checkpointIndex}`).catch((err) => {
-        this.logger?.warn?.(
-          `Auto-commit on agent_settled failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
+      this.autoCommitWip(`checkpoint ${this.checkpointIndex}`)
+        .then(async () => {
+          // A follow-up may already be streaming while checkpoint I/O finishes.
+          if (this.agentActivityState === "idle" && this.stateMachine.getStatus() === "running") {
+            await this.stateMachine.transitionTo(
+              "idle",
+              "Assistant settled; available for follow-up",
+            );
+          }
+        })
+        .catch((err) => {
+          this.logger?.warn?.(
+            `Auto-commit on agent_settled failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
     });
 
     pi.on("event", () => {
@@ -268,6 +291,14 @@ export class LifecyclePolicyManager extends EventEmitter {
       }
     }
 
+    count += this.mirrorConnectionsCount();
+    if (count > 0) {
+      this.hadAttachedClients = true;
+      this.idleStartTime = null;
+    } else if (this.hadAttachedClients) {
+      this.hadAttachedClients = false;
+      if (this.agentActivityState === "idle") this.idleStartTime = this.clock();
+    }
     return count;
   }
 
@@ -286,6 +317,7 @@ export class LifecyclePolicyManager extends EventEmitter {
   }
 
   public getIdleSince(): string | null {
+    this.getAttachedClientsCount();
     if (
       this.idleStartTime !== null &&
       this.agentActivityState === "idle" &&
@@ -297,6 +329,7 @@ export class LifecyclePolicyManager extends EventEmitter {
   }
 
   public getSuggestedAction(): SuggestedLifecycleAction {
+    this.getAttachedClientsCount();
     const now = this.clock();
     const currentStatus = this.stateMachine.getStatus();
 
@@ -320,8 +353,10 @@ export class LifecyclePolicyManager extends EventEmitter {
       return "none";
     }
 
-    // 4. Idle calculation
+    // Do not suspend while the settled turn's checkpoint is still being preserved.
+    // The durable idle transition is published only after checkpoint/flush completes.
     if (
+      currentStatus === "idle" &&
       this.idleStartTime !== null &&
       this.agentActivityState === "idle" &&
       this.getAttachedClientsCount() === 0
@@ -371,11 +406,29 @@ export class LifecyclePolicyManager extends EventEmitter {
     return false;
   }
 
+  private recordPreservationFailure(message: string, commit?: string): void {
+    this.checkpointPreserved = false;
+    this.stateMachine.setError({
+      code: ProtocolErrorCode.INTERNAL_ERROR,
+      message,
+      details: { stage: "git_preservation", commit },
+    });
+    this.logger?.warn?.(message);
+  }
+
   /**
    * Automatically commits dirty files to the workBranch and optionally pushes to remote origin.
    */
   public async autoCommitWip(message = `checkpoint ${this.checkpointIndex}`): Promise<boolean> {
     if (!this.repoPath || !fs.existsSync(this.repoPath)) {
+      // Omitted Git is an intentional dependency choice; a vanished configured
+      // workspace is uninspected work, not a successful final checkpoint.
+      if (this.repoPath)
+        this.recordPreservationFailure(
+          "Git preservation failed: configured workspace is missing; any recorded recovery bundle is an earlier checkpoint",
+        );
+      await this.stateMachine.flushSession();
+      await this.stateMachine.persistManifest();
       return false;
     }
 
@@ -409,56 +462,78 @@ export class LifecyclePolicyManager extends EventEmitter {
         }
       };
 
-      // 1. Check status for uncommitted changes
-      const statusRes = await runGit(["status", "--porcelain"]);
-      if (!statusRes.stdout.trim()) {
-        // Clean working tree
-        return false;
-      }
-
-      // 2. Stage all modifications
-      await runGit(["add", "-A"]);
-
-      // 3. Create commit
-      const commitMsg = `pi-cloud: ${message}`;
-      const commitRes = await runGit(["commit", "-m", commitMsg]);
-      if (commitRes.exitCode !== 0 && !commitRes.stdout.includes("nothing to commit")) {
-        this.logger?.warn?.(`Git commit failed: ${commitRes.stderr}`);
-        return false;
-      }
-
-      this.checkpointIndex++;
-
-      // 4. Update manifest with commit hash
-      const headRes = await runGit(["rev-parse", "HEAD"]);
-      const lastCommit = headRes.stdout.trim();
-      if (lastCommit) {
-        await this.stateMachine.updateGit({ lastCommit });
-      }
-
-      // 5. Optional autoPush with bounded timeout
-      if (this.autoPush) {
-        const workBranch = this.stateMachine.getManifest().repo.workBranch;
-        this.logger?.info?.(
-          `Pushing work branch '${workBranch}' to origin (timeout: ${this.pushTimeoutMs}ms)`,
-        );
-        const pushRes = await runGit(["push", "origin", workBranch], this.pushTimeoutMs);
-        if (pushRes.exitCode !== 0) {
-          this.logger?.warn?.(`Git push failed (will retry next turn): ${pushRes.stderr}`);
+      let checkpoint: { index: number; lastCommit: string; message: string } | undefined;
+      this.checkpointPreserved = false;
+      try {
+        // A clean tree can contain commits created by the agent itself.
+        const statusRes = await runGit(["status", "--porcelain"]);
+        if (statusRes.exitCode !== 0) throw new Error(`Git status failed: ${statusRes.stderr}`);
+        const dirty = Boolean(statusRes.stdout.trim());
+        const commitMsg = `pi-cloud: ${message}`;
+        if (dirty) {
+          const addRes = await runGit(["add", "-A"]);
+          if (addRes.exitCode !== 0) throw new Error(`Git add failed: ${addRes.stderr}`);
+          const commitRes = await runGit(["commit", "-m", commitMsg]);
+          if (commitRes.exitCode !== 0) throw new Error(`Git commit failed: ${commitRes.stderr}`);
+          this.checkpointIndex++;
         }
+
+        // 4. Update manifest with commit hash
+        const headRes = await runGit(["rev-parse", "HEAD"]);
+        if (headRes.exitCode !== 0) throw new Error(`Git HEAD lookup failed: ${headRes.stderr}`);
+        const lastCommit = headRes.stdout.trim();
+        if (lastCommit) {
+          await this.stateMachine.updateGit({ lastCommit });
+        }
+
+        // Preservation is independent of publication. A hash alone cannot recover work.
+        try {
+          const bundle = await createRecoveryBundle(runGit, lastCommit, this.sourceRef);
+          await this.stateMachine.preserveGitBundle(bundle, lastCommit);
+          this.checkpointPreserved = true;
+        } catch (err) {
+          this.recordPreservationFailure(
+            `Git preservation failed: ${err instanceof Error ? err.message : String(err)}`,
+            lastCommit,
+          );
+        }
+
+        // 5. Optional autoPush with bounded timeout
+        if (this.autoPush) {
+          const workBranch = this.stateMachine.getManifest().repo.workBranch;
+          this.logger?.info?.(
+            `Pushing work branch '${workBranch}' to origin (timeout: ${this.pushTimeoutMs}ms)`,
+          );
+          const pushRes = await runGit(
+            ["push", "origin", `HEAD:refs/heads/${workBranch}`],
+            this.pushTimeoutMs,
+          );
+          if (pushRes.exitCode !== 0) {
+            const message = `Git push failed: ${pushRes.stderr}. Preserved bundle recovery is independent of publication.`;
+            this.logger?.warn?.(message);
+            if (this.checkpointPreserved)
+              this.stateMachine.setError({
+                code: ProtocolErrorCode.INTERNAL_ERROR,
+                message,
+                details: { stage: "git_push", commit: lastCommit },
+              });
+          } else this.stateMachine.clearErrorForStage("git_push");
+        }
+
+        if (dirty && this.checkpointPreserved)
+          checkpoint = { index: this.checkpointIndex - 1, lastCommit, message: commitMsg };
+
+        return dirty && this.checkpointPreserved;
+      } catch (err) {
+        const message = `Git checkpoint failed: ${err instanceof Error ? err.message : String(err)}`;
+        this.recordPreservationFailure(message);
+        return false;
+      } finally {
+        // Transcript durability does not depend on dirty files or successful Git operations.
+        await this.stateMachine.flushSession();
+        await this.stateMachine.persistManifest();
+        if (checkpoint) this.emit("checkpoint_committed", checkpoint);
       }
-
-      // 6. Flush session and manifest
-      await this.stateMachine.flushSession();
-      await this.stateMachine.persistManifest();
-
-      this.emit("checkpoint_committed", {
-        index: this.checkpointIndex - 1,
-        lastCommit,
-        message: commitMsg,
-      });
-
-      return true;
     };
 
     const next = this.commitLock.then(run, run);
@@ -515,7 +590,12 @@ export class LifecyclePolicyManager extends EventEmitter {
       );
     }
 
-    await this.stateMachine.transitionTo(status, reason);
+    if (status === "completed" && !this.checkpointPreserved) {
+      await this.stateMachine.transitionTo(
+        "failed",
+        "Finalization could not preserve Git contents; see manifest error and any earlier recovery artifact",
+      );
+    } else await this.stateMachine.transitionTo(status, reason);
   }
 
   /**
