@@ -23,3 +23,5 @@ For a writing task, read only your model family's guide:
 - **GPT/OpenAI models:** [Astra writing guidance](../../guidance/astra-writing.md).
 
 Do not load the other model family's guide or load these detailed guides for unrelated tasks.
+
+Before reviewing a draft, or checking your own at the author's request, read [reviewing a draft](references/review.md). It is provisional.
