@@ -44,6 +44,8 @@ Review needed:
 - What this review should investigate:
 ```
 
+After a consequential repair, return to the reviewer’s original objection and check what would settle it. For duplicated decisions, trace the affected callers to the rule they now share.
+
 Ordinary repairs need focused verification and self-review, not an automatic new review. Request further review when a consequential changed approach or disputed technical finding needs independent investigation. Focus on that question and reuse still-relevant evidence.
 
 The reviewer should examine whether a claimed basis actually settles the question. Keep unresolved choices visible in the response; a scoped repair review does not silently settle them. This opening preserves context, not a fixed implementation plan or a prerequisite for running review.
