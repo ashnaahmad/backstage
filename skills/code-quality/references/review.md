@@ -4,6 +4,8 @@ Use a fresh Pi child in the working repository, or an isolated worktree when pro
 
 When `quality_review` is available, pass the short brief below in `brief` and relevant paths in `sources`. It launches the opposite provider by default, with fresh context and these review principles. No passing-check prerequisite applies. Its returned text is evidence to assess, not approval. Use the shell fallback below outside Pi.
 
+Request a focused independent investigation when a concrete observation leaves a consequential decision unresolved. Give the investigator the decision, the suspected cost and what a change must preserve, and leave them room to conclude that the current design is worth keeping.
+
 Prepare a short brief with:
 
 - The requested behaviour, preserved guarantees and governing design rationale; identify genuine open questions. Supply relevant project sources directly, not just the implementer’s summary.
