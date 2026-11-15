@@ -168,8 +168,9 @@ export default function diffPane(pi: ExtensionAPI) {
     const lost = pane.setTempFiles(entries.filter(entry => entry.type === 'custom' && entry.customType === TEMP_ENTRY)
       .map(entry => entry.data), baselineFolder(ctx.sessionManager?.getSessionId?.()));
     if (lost && ctx.mode === 'tui' && ctx.hasUI) ctx.ui.notify(lost, 'warning');
-    // A signal stops Pi through the same quit as /quit: a quit Pi chose closes its previews, a signal
-    // (tmux closing its pane, kill) leaves them for a resume. Node runs every listener of a signal before
+    // A signal stops Pi through the same quit as /quit: a quit Pi chose brings its editor beside it before
+    // closing its previews; after a signal (tmux closing its pane, kill) they close where they are, as for a
+    // Pi that died (releaseOrphans). Node runs every listener of a signal before
     // any promise callback, so the flag is set when close() reads it in its queued step. Only in the
     // terminal UI: elsewhere Pi may not handle these signals, and a listener would keep them from ending
     // the process.

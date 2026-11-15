@@ -26,6 +26,7 @@ const SESSION = '@pi_session';                     // pane option on Pi and its 
 const PI_PID = '@pi_pid';                          // pane option on Pi: its process and the pane's, to tell a live Pi from a dead one;
 const LEFT = 'left';                               // then this mark once that Pi has released its previews on leaving
 export const PREVIEW_WINDOW = '@pi_preview_window'; // window option: a waiting preview, left out of the Windows row
+const KEPT = '@pi_kept_for';                       // pane option on an editor kept after its Pi went: that Pi's pane
 const WRITING = '@pi_writing';                      // pane option on an editor in the writing view (setWriting)
 export const TABS = fileURLToPath(new URL('../tmux-tabs.mjs', import.meta.url));
 const READ_ONLY = new Set(['read', 'grep', 'find', 'ls']);
@@ -357,7 +358,10 @@ export async function claimSession(owner, session, { nvim = findExecutable('nvim
   await tmux('set-option', '-p', '-t', owner, SESSION, session);
   return withSession(session, () => withDocuments(owner, async () => {
     const mine = await ownedPreviews(owner);
-    for (const preview of mine) await tmux('set-option', '-p', '-t', preview.id, SESSION, session).catch(() => {});
+    for (const preview of mine) {
+      await tmux('set-option', '-p', '-t', preview.id, SESSION, session).catch(() => {});
+      await tmux('set-option', '-pu', '-t', preview.id, KEPT).catch(() => {});   // this Pi's again
+    }
     const own = mine.find(preview => preview.key === 'doc');
     if (own) await addDocuments(owner, await documents(own.id));
     const kinds = new Set(mine.map(preview => preview.key));
@@ -376,6 +380,7 @@ export async function claimSession(owner, session, { nvim = findExecutable('nvim
         continue;
       }
       await tmux('set-option', '-p', '-t', id, doc ? DOC_OWNER : DIFF_OWNER, owner);
+      await tmux('set-option', '-pu', '-t', id, KEPT).catch(() => {});
       if (doc) {
         const open = await openFiles(nvim, id);
         if (!open) result.unanswered.push(id);
@@ -391,18 +396,18 @@ export async function claimSession(owner, session, { nvim = findExecutable('nvim
 
 /**
  * Previews whose Pi went without quitting (its pane was killed or closed with its window, Pi died, or a
- * signal stopped it): they keep running with whatever they hold, saved or not, still tagged with their
- * session, so resuming it takes them back (claimSession) with every document tab. Until then they are
- * ordinary windows: shown in the Windows row, with no Panels row of the gone Pi. A Pi's deliberate quit
- * closes its own previews instead (`close`). Panes and windows where no Pi runs any more lose their Pi
- * marks. Runs from tmux hooks whenever a pane closes (tmux/pi-tabs.conf), from a Pi stopped by a signal
- * or quitting after its pane has gone (`leaving`: its pane and process, marked as gone though the process
+ * signal stopped it) close as on a quit (`close`): its diffs, and its editor unless that holds unsaved
+ * text or does not answer. A kept editor runs on with what it holds, still tagged with its session, so
+ * resuming it takes it back (claimSession) with every document tab; until then it is an ordinary window,
+ * shown in the Windows row, with no Panels row of the gone Pi. Panes and windows where no Pi runs any
+ * more lose their Pi marks. Runs from tmux hooks whenever a pane closes (tmux/pi-tabs.conf), from a Pi
+ * stopped by a signal or quitting after its pane has gone (`leaving`: its pane and process, marked as gone though the process
  * still runs, only while it is still the Pi recorded there, never a new Pi started in that pane), and
  * after a window is closed from its tab.
  * Each decision is made again under the session's lock (as adoption is) and the old Pi pane's documents
  * lock (as its redraws are), so neither an adoption nor a new Pi in that pane is undone by a stale view.
  */
-export async function releaseOrphans({ leaving } = {}) {
+export async function releaseOrphans({ leaving, nvim = findExecutable('nvim') } = {}) {
   if (leaving && await paneExists(leaving.pane)) {
     // Marks the departure while that process is still the Pi recorded there, so every later judgement
     // (this one, redraws before the process has exited) sees it gone, and a new Pi there does not.
@@ -417,37 +422,56 @@ export async function releaseOrphans({ leaving } = {}) {
   const seen = new Map();   // for finding candidates; each change decides again under its locks
   const looksGone = pane => seen.get(pane) ?? seen.set(pane, gone(pane)).get(pane);
   const rows = await allPanes(['#{pane_id}', `#{${SESSION}}`, `#{${DOC_OWNER}}`, `#{${DIFF_OWNER}}`,
-    `#{${PANELS}}`, `#{${PREVIEW_WINDOW}}`, `#{${PI_OWNER}}`].join('\t'));
+    `#{${KEPT}}`, `#{${PI_OWNER}}`].join('\t'));
   // A pane where Pi has gone (a shell it ran in, or the pane of a Pi leaving) is no longer a Pi's, nor shows its row.
   const unmark = async pane => {
     await tmux('set-option', '-pu', '-t', pane, PI_OWNER).catch(() => {});
     await tmux('set-option', '-pu', '-t', pane, PANELS).catch(() => {});
   };
-  for (const [id, session, , , , , flag] of rows) {
+  for (const [id, session, , , , flag] of rows) {
     if (!flag || !await looksGone(id)) continue;
     await (session ? withSession(session, () => withDocuments(id, async () => {
       if (await gone(id)) await unmark(id);
     })) : unmark(id));
   }
-  const groups = new Map();   // session and gone owner → its previews still marked as that Pi's
-  for (const [id, session, doc, diff, row, waiting] of rows) {
+  // Eligibility follows ownership, not what was drawn: a preview Pi died before drawing is its too. An
+  // editor already kept for that Pi (unsaved text, or no answer) is not asked again on every sweep.
+  const groups = new Map();   // session and gone owner → its previews
+  for (const [id, session, doc, diff, keptFor] of rows) {
     const previous = doc || diff;
-    if (!previous || (!row && !waiting) || !await looksGone(previous)) continue;
+    if (!previous || (doc && keptFor === previous) || !await looksGone(previous)) continue;
     const key = `${session}\n${previous}`;
     if (!groups.has(key)) groups.set(key, { session, previous, previews: [] });
     groups.get(key).previews.push({ id, tag: doc ? DOC_OWNER : DIFF_OWNER });
   }
   for (const { session, previous, previews } of groups.values()) {
     const release = () => withDocuments(previous, async () => {
-      if (!await gone(previous)) return;   // a new Pi in that pane
+      // The departed Pi as recorded in its pane. A new Pi starting there records itself before waiting
+      // for these locks (claimSession), so before each change the departure is checked again: once a new
+      // Pi is recorded, what is left is its to adopt.
+      const departed = (await tmux('show-options', '-pqv', '-t', previous, PI_PID).catch(() => '')).trim();
+      const still = async () => await gone(previous)
+        && (await tmux('show-options', '-pqv', '-t', previous, PI_PID).catch(() => '')).trim() === departed;
       for (const { id, tag } of previews) {
         // A resuming Pi may have taken it over meanwhile.
+        if (!await still()) return;
         if ((await tmux('show-options', '-pqv', '-t', id, tag).catch(() => '')).trim() !== previous) continue;
-        await tmux('set-option', '-pu', '-t', id, PANELS).catch(() => {});
         const window = (await tmux('display-message', '-p', '-t', id, '#{window_id}').catch(() => '')).trim();
-        if (!window || await piRuns(window)) continue;
-        await tmux('set-option', '-wu', '-t', window, PREVIEW_WINDOW).catch(() => {});
-        await tmux('set-option', '-wu', '-t', window, PANELS).catch(() => {});
+        if (tag === DIFF_OWNER) {
+          await tmux('kill-pane', '-t', id).catch(() => {});
+          if (window) await dropSidebarOnly(window);
+          continue;
+        }
+        // Already kept for this Pi by an earlier sweep (and perhaps saved since): ordinary work now.
+        if ((await tmux('show-options', '-pqv', '-t', id, KEPT).catch(() => '')).trim() === previous) continue;
+        // An editor is first made an ordinary window, visible in the Windows row with no row of the gone
+        // Pi, so one that stays (its quit refused or failing later) is findable. It then quits unless it
+        // holds unsaved text (PiMarkdownQuit decides, in Neovim); one that does not answer is kept too.
+        await tmux('set-option', '-pu', '-t', id, PANELS).catch(() => {});
+        if (window) await unmarkWindow(window, [PREVIEW_WINDOW, PANELS]);
+        const server = await docServer(id);
+        if (server && nvim && await remoteExpr(nvim, server, 'v:lua.PiMarkdownQuit()').catch(() => '') === 'quit') continue;
+        await tmux('set-option', '-p', '-t', id, KEPT, previous).catch(() => {});
       }
     });
     await (session ? withSession(session, release) : release());
@@ -455,14 +479,16 @@ export async function releaseOrphans({ leaving } = {}) {
   // Window marks follow the panes' (drawPanels sets them again when a Pi there redraws).
   const marked = (await tmux('list-windows', '-a', '-F', `#{window_id}\t#{${PI_WINDOW}}`)).split('\n').map(line => line.split('\t'))
     .filter(([, flag]) => flag).map(([id]) => id);
-  for (const window of new Set(marked)) {
-    if (await piRuns(window)) continue;
-    await tmux('set-option', '-wu', '-t', window, PI_WINDOW).catch(() => {});
-    await tmux('set-option', '-wu', '-t', window, PANELS).catch(() => {});
-  }
+  for (const window of new Set(marked)) await unmarkWindow(window, [PI_WINDOW, PANELS]);
 }
 // Whether a pane of `window` is marked as running a Pi.
 const piRuns = async window => (await tmux('list-panes', '-t', window, '-F', `#{${PI_OWNER}}`).catch(() => '')).split('\n').some(Boolean);
+// Clears `marks` of a window (a pane names its window) only when no Pi runs there: another Pi's Windows-row
+// mark and Panels row stay. The one rule for every window a departing Pi leaves.
+async function unmarkWindow(window, marks) {
+  if (await piRuns(window)) return;
+  for (const mark of marks) await tmux('set-option', '-wu', '-t', window, mark).catch(() => {});
+}
 
 /**
  * The editor's own account of itself (PiMarkdownState in nvim/pi-markdown/init.lua), the one source for
@@ -1332,9 +1358,9 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
       // Child Pi processes (reviewers, `pi -p`) inherit TMUX_PANE; only the terminal UI owns the panes.
       if (!env.TMUX || !owner || mode !== 'tui') return;
       await serial(async () => {
-        // Pi quits the same way when a signal stops it (tmux closing its pane sends SIGHUP): that is not a
-        // deliberate close, so the previews stay for a resume (releaseOrphans).
-        if (signalled() || !await paneExists(owner)) return releaseOrphans({ leaving: { pane: owner, pid: process.pid } });
+        // Pi quits the same way when a signal stops it (tmux closing its pane sends SIGHUP): its previews
+        // close as for a Pi that died (releaseOrphans), without rearranging a layout that may be going.
+        if (signalled() || !await paneExists(owner)) return releaseOrphans({ leaving: { pane: owner, pid: process.pid }, nvim });
         // A parked editor comes beside Pi first, so unsaved text is not left in a hidden window; one in the
         // writing view leaves it.
         const first = await layout();
@@ -1356,17 +1382,16 @@ export function createDiffPane({ env = process.env, hunk = findExecutable('hunk'
         await withDocuments(owner, async () => {
           for (const preview of previews.filter(preview => preview.key === 'doc')) {
             const server = await docServer(preview.id);
-            if (server && nvim) await remote(server, 'v:lua.PiMarkdownQuit()').catch(() => {});
+            const answer = server && nvim ? await remote(server, 'v:lua.PiMarkdownQuit()').catch(() => '') : '';
+            if (answer !== 'quit') await tmux('set-option', '-p', '-t', preview.id, KEPT, owner).catch(() => {});
           }
           await tmux('set-option', '-pu', '-t', owner, DOCS).catch(() => {});
           for (const pane of [owner, ...previews.map(preview => preview.id)]) await tmux('set-option', '-pu', '-t', pane, PANELS).catch(() => {});
           for (const { window } of (await layout().catch(() => ({ previews: [] }))).previews.filter(preview => preview.window !== first.window)) {
-            await tmux('set-option', '-wu', '-t', window, PREVIEW_WINDOW).catch(() => {});
-            await tmux('set-option', '-wu', '-t', window, PANELS).catch(() => {});
+            await unmarkWindow(window, [PREVIEW_WINDOW, PANELS]);
           }
           await tmux('set-option', '-pu', '-t', owner, PI_OWNER).catch(() => {});
-          await tmux('set-option', '-wu', '-t', owner, PANELS).catch(() => {});
-          await tmux('set-option', '-wu', '-t', owner, PI_WINDOW).catch(() => {});
+          await unmarkWindow(owner, [PANELS, PI_WINDOW]);
           const recorded = (await tmux('show-options', '-pqv', '-t', owner, PI_PID).catch(() => '')).trim().split(' ');
           if (recorded[0] === String(process.pid)) await tmux('set-option', '-p', '-t', owner, PI_PID, `${recorded[0]} ${recorded[1]} ${LEFT}`);
         }).catch(() => {});

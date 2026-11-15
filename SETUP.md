@@ -468,7 +468,8 @@ For disposable agent/test windows, run the command through
 `scripts/tmux-task.sh` as the window's foreground command.
 Do not append a fallback shell; capture logs to a file when
 needed. This wrapper preserves the command's exit status
-and removes only sidebar-only leftovers after it ends.
+and removes only sidebar-only leftovers after it ends,
+including when several tasks in one window end together.
 
 Start Pi inside tmux, then run `ccmux sidebar --toggle`
 from a shell inside tmux. Enable tmux mouse support for
@@ -588,14 +589,17 @@ exits it and marks the Pi pane, so a later change in the same
 prompt reopens it; a file filter that hides every file
 keeps it open. Press `q` in Hunk to close it; it stays closed
 until the next prompt. Pi keeps its previews across
-`/reload` and `/new`, and closes them on `/quit` or Ctrl-D (an editor with unsaved text stays). If Pi
-is stopped by a signal (`kill`) or loses its owner pane, surviving previews stay open, saved or not, as
-ordinary windows listed in the Windows row; close them yourself, or resume that session (`pi -c`,
-`pi --resume`), in any pane, which takes them back instead of opening new ones: the editor keeps its
-unsaved text and its document tabs. Closing an entire window destroys its saved panes; the window-bar
-close action first moves an editor with unsaved text out. A process that dies back to a surviving shell
-without a shutdown signal is detected on the next orphan sweep, triggered by a pane or window closing.
-Other Pi sessions leave them alone. If something
+`/reload` and `/new`, and closes them on `/quit`, Ctrl-D or the 48-hour idle exit (an editor with unsaved
+text stays). A Pi that goes without quitting (stopped by a signal such as `kill`, killed outright, or
+losing its owner pane) has its previews closed the same way, with their windows and Panels rows: its
+diffs, and its editor unless that holds unsaved text or does not answer. A kept editor stays as an
+ordinary window listed in the Windows row, without the gone Pi's row, and later sweeps leave it alone;
+save and close it yourself, or resume that session (`pi -c`, `pi --resume`), in any pane, which takes it
+back with its unsaved text and document tabs. Closing an entire window destroys its saved panes; the
+window-bar close action first moves an editor with unsaved text out. A Pi that dies is noticed by the
+orphan sweep, triggered by a pane or window closing (with its own pane, when Pi runs under the task
+wrapper); one that dies back to a surviving shell waits for the next such sweep. A window where another
+Pi runs keeps that Pi's mark and row. Other Pi sessions leave them alone. If something
 still runs in the old Pi's pane, Pi says so and opens no second editor by itself (`/edit` still does).
 Previews opened before this behaviour existed are not recognised: save and close them yourself.
 
@@ -610,8 +614,9 @@ installed, the bottom of the terminal has two labelled rows:
   that window; click its `×` for a menu (Keep window first,
   also on Escape) that says what closing ends, including a
   Pi session. An editor with unsaved text in that window
-  moves to its own `edit` window instead of closing; a
-  closed Pi's other previews stay as ordinary windows.
+  moves to its own `edit` window instead of closing; the
+  closed Pi's other previews close, except an editor with
+  unsaved text, which stays as an ordinary window.
 - `Panels`: for the Pi you are in (or whose preview you are
   in; also while the ccmux sidebar is active, when one Pi
   runs in the window): `Diff: <repository>` per open Hunk and

@@ -1473,18 +1473,20 @@ test('Pi quitting with unsaved text and restarting in the same pane gets its doc
   }
 });
 
-test('a Pi that goes without quitting leaves its previews, saved or not, as ordinary windows for a resume to adopt', async () => {
+test('a Pi that goes without quitting closes its diffs and saved editors; an editor with unsaved text stays, as an ordinary window, for a resume to adopt', async () => {
   tmux('source-file', join(root, 'tmux/pi-tabs.conf'));  // the hooks, as installed
   const lib = await import(pathToFileURL(join(root, 'scripts/lib/diff-pane.ts')).href);
-  const files = ['gone-one', 'gone-two', 'gone-crash', 'gone-live', 'gone-window', 'gone-signal', 'gone-shell', 'gone-replaced'].map(name => join(dir, `${name}.md`));
+  const files = ['gone-one', 'gone-two', 'gone-crash', 'gone-live', 'gone-window', 'gone-signal', 'gone-shell', 'gone-replaced', 'gone-dirty', 'gone-race']
+    .map(name => join(dir, `${name}.md`));
   for (const file of files) writeFileSync(file, `# ${basename(file)}\n`);
   const created = [];
   const alive = id => panes().some(([pane]) => pane === id);
   const hidden = pane => tmux('show-options', '-wqv', '-t', pane, '@pi_preview_window');
   const row = pane => tmux('show-options', '-pqv', '-t', pane, '@pi_panels');
   const windowOf = pane => tmux('display-message', '-p', '-t', pane, '#{window_id}');
+  const windows = () => tmux('list-windows', '-a', '-F', '#{window_id}').split('\n');
   const code = (pi, line) => tool('edit', () => appendFileSync(join(repo, 'tracked.txt'), `${line}\n`), pi.ctx, pi.ext, { path: 'tracked.txt' });
-  // A Pi with a saved editor and a Hunk, one of them waiting in a hidden window.
+  // A Pi with a saved editor and a Hunk, the editor waiting in a hidden window.
   async function withPreviews(session, documents, command) {
     const pi = await otherPi(session, command);
     created.push(pi.pane);
@@ -1493,11 +1495,18 @@ test('a Pi that goes without quitting leaves its previews, saved or not, as ordi
     const [editor] = docPanes(pi.pane), [hunk] = diffPanes(pi.pane);
     assert.ok(editor && hunk, `${session}: an editor and a Hunk`);
     assert.equal(hidden(editor), '1', `${session}: the saved editor waits in a hidden window, the diff beside Pi`);
-    return { ...pi, editor, hunk };
+    return { ...pi, editor, hunk, editorWindow: windowOf(editor) };
+  }
+  async function unsaved(pane, text) {
+    tmux('send-keys', '-t', pane, 'G', 'o', text, 'Escape');
+    await waitFor(() => screen(pane).includes(text), `typed ${text}`);
   }
   // The tab helper, run as tmux runs it: asynchronously, since this process's Pis may hold a lock it waits for.
   const helper = (...args) => promisify(execFile)(process.execPath, ['--no-warnings', join(root, 'scripts/tmux-tabs.mjs'), ...args]);
-  const released = ({ editor, hunk }) => [editor, hunk].every(pane => alive(pane) && !hidden(pane) && !row(pane));
+  // Closed: no pane left, nor the hidden window the editor waited in.
+  const closed = ({ editor, hunk, editorWindow }) => !alive(editor) && !alive(hunk) && !windows().includes(editorWindow);
+  // Kept: running, shown in the Windows row, with no Panels row of the gone Pi.
+  const kept = pane => alive(pane) && !hidden(pane) && !row(pane);
   try {
     // Killed pane: Pi is then told to quit (as SIGHUP does) after its pane has gone.
     const killed = await withPreviews('gone-killed', files.slice(0, 2));
@@ -1505,72 +1514,227 @@ test('a Pi that goes without quitting leaves its previews, saved or not, as ordi
     tmux('kill-pane', '-t', killed.pane);
     await fire('session_shutdown', { reason: 'quit' }, killed.ctx, killed.ext);
     assert.deepEqual(notices, [], 'quitting after the pane has gone reports no failure');
-    await waitFor(() => released(killed), 'the saved editor and the Hunk keep running, shown as ordinary windows without its row');
-    assert.equal(tmux('show-options', '-pqv', '-t', killed.editor, '@pi_session'), 'gone-killed', 'still tagged with their session');
-    // Typing there refreshes its row (the editor's autocmds); that brings back no row of the gone Pi.
-    tmux('send-keys', '-t', killed.editor, 'G', 'o', 'typed after Pi went', 'Escape');
-    await waitFor(() => screen(killed.editor).includes('typed after Pi went'), 'typed in the left editor');
-    await sleep(1500);
-    assert.equal(row(killed.editor), '', 'no row for a gone Pi');
+    await waitFor(() => closed(killed), 'the saved editor, its hidden window and the Hunk close');
 
-    // A Pi that dies without quitting: its pane exits (the hook releases its previews).
+    // The same, with unsaved text in the editor: the editor stays, findable, and tagged for a resume.
+    const dirty = await withPreviews('gone-dirty', [files[8]]);
+    await unsaved(dirty.editor, 'typed before Pi went');
+    tmux('kill-pane', '-t', dirty.pane);
+    await fire('session_shutdown', { reason: 'quit' }, dirty.ctx, dirty.ext);
+    await waitFor(() => !alive(dirty.hunk) && kept(dirty.editor), 'the Hunk closes; the editor stays as an ordinary window');
+    assert.ok(screen(dirty.editor).includes('typed before Pi went'), 'with its unsaved text');
+    assert.equal(tmux('show-options', '-pqv', '-t', dirty.editor, '@pi_session'), 'gone-dirty', 'still tagged with its session');
+    // Typing there refreshes its row (the editor's autocmds); that brings back no row of the gone Pi.
+    await unsaved(dirty.editor, 'typed after Pi went');
+    await sleep(1500);
+    assert.equal(row(dirty.editor), '', 'no row for a gone Pi');
+
+    // A Pi that dies without quitting: its pane exits (the hook closes its previews).
     const crashed = await withPreviews('gone-crash', [files[2]], 'cat');
     tmux('send-keys', '-t', crashed.pane, 'C-d');
-    await waitFor(() => !alive(crashed.pane) && released(crashed), 'a pane that exits leaves its previews the same way');
+    await waitFor(() => !alive(crashed.pane) && closed(crashed), 'a pane that exits closes its previews the same way');
 
-    // A signal stopping a Pi whose pane stays (kill <pid>): it quits as for /quit, but leaves its previews.
+    // A signal stopping a Pi whose pane stays (kill <pid>): its previews close where they are.
     const listening = process.listeners('SIGTERM');
     const signalled = await withPreviews('gone-signal', [files[5]]);
     const added = process.listeners('SIGTERM').filter(listener => !listening.includes(listener));
     assert.equal(added.length, 1, 'the Pi listens for SIGTERM');
     added[0]('SIGTERM');   // that listener alone: the test process receives no signal
     await fire('session_shutdown', { reason: 'quit' }, signalled.ctx, signalled.ext);
-    await waitFor(() => released(signalled), 'its previews stay, as ordinary windows, though its pane is still there');
+    await waitFor(() => closed(signalled), 'its previews close, though its pane is still there');
     assert.deepEqual([tmux('show-options', '-pqv', '-t', signalled.pane, '@pi_owner'), row(signalled.pane)], ['', ''],
       'and its pane is no longer marked as a Pi, nor shows its row');
-    // Before Pi has exited (its process, recorded there, still runs), typing in the left editor redraws no row of it.
-    tmux('send-keys', '-t', signalled.editor, 'G', 'o', 'typed after the signal', 'Escape');
-    await waitFor(() => screen(signalled.editor).includes('typed after the signal'), 'typed');
-    await sleep(1500);
-    assert.ok(released(signalled) && !row(signalled.pane), 'still released while the leaving process runs');
 
-    // A Pi that dies in a shell, which stays: the next sweep (any pane closing) releases its previews.
+    // A Pi that dies in a shell, which stays: the next sweep (any pane closing) closes its previews.
     const shell = await withPreviews('gone-shell', [files[6]]);
     piDied(shell.pane);
     await helper('sweep');
-    assert.ok(released(shell) && !row(shell.pane), 'released by the sweep, with no row left on the shell\'s pane');
+    await waitFor(() => closed(shell) && !row(shell.pane), 'closed by the sweep, with no row left on the shell\'s pane');
 
     // A leaving Pi's release applies only while it is the Pi recorded in its pane: a new Pi there keeps its previews.
     const replaced = await withPreviews('gone-replaced', [files[7]]);
     const stale = deadPid();   // the leaving Pi; the pane now records this (live) test process
     await lib.releaseOrphans({ leaving: { pane: replaced.pane, pid: stale } });
-    assert.ok(hidden(replaced.editor) === '1' && row(replaced.editor) && tmux('show-options', '-pqv', '-t', replaced.pane, '@pi_owner') === '1',
+    assert.ok(hidden(replaced.editor) === '1' && row(replaced.editor) && alive(replaced.hunk) && tmux('show-options', '-pqv', '-t', replaced.pane, '@pi_owner') === '1',
       'the new Pi\'s previews and marks are untouched');
     await lib.releaseOrphans({ leaving: { pane: replaced.pane, pid: process.pid } });
-    await waitFor(() => released(replaced), 'the Pi recorded there is released when it leaves');
+    await waitFor(() => closed(replaced), 'the Pi recorded there closes its previews when it leaves');
 
     // A live Pi's previews are untouched.
     const live = await withPreviews('gone-live', [files[3]]);
-    assert.ok(hidden(live.editor) === '1' && row(live.editor), 'a live Pi keeps its hidden preview and its row');
+    await helper('sweep');
+    assert.ok(hidden(live.editor) === '1' && row(live.editor) && alive(live.hunk), 'a live Pi keeps its hidden preview, its Hunk and its row');
 
-    // Closing a Pi's window from its tab: an editor there with unsaved text moves to its own window, and
-    // the previews elsewhere are released.
+    // Closing a Pi's window from its tab: an editor there with unsaved text moves to its own window and
+    // stays; the Hunk elsewhere closes.
     const closing = await withPreviews('gone-window', [files[4]]);
     await closing.ext.commands.get('panel').handler('edit', closing.ctx);
-    tmux('send-keys', '-t', closing.editor, 'G', 'o', 'unsaved in a closing window', 'Escape');
-    await waitFor(() => screen(closing.editor).includes('unsaved in a closing window'), 'unsaved text typed');
+    await unsaved(closing.editor, 'unsaved in a closing window');
     const client = tmux('list-clients', '-F', '#{client_name}').split('\n')[0] ?? '';
     await helper('kill-window', windowOf(closing.pane), client);
-    await waitFor(() => !alive(closing.pane) && released(closing), 'the editor (moved out) and the Hunk remain as ordinary windows');
+    await waitFor(() => !alive(closing.pane) && !alive(closing.hunk) && kept(closing.editor), 'the editor (moved out) remains as an ordinary window; the Hunk closes');
     assert.ok(screen(closing.editor).includes('unsaved in a closing window'), 'with its unsaved text');
 
-    // Resuming the killed Pi's session elsewhere takes both previews back, with every document tab.
-    const resumed = await otherPi('gone-killed');
+    // Resuming the dirty Pi's session elsewhere takes its editor back, with every document tab.
+    const resumed = await otherPi('gone-dirty');
     created.push(resumed.pane);
-    assert.deepEqual([docPanes(resumed.pane), diffPanes(resumed.pane)], [[killed.editor], [killed.hunk]], 'adopted, not reopened');
-    assert.deepEqual((await lib.documents(resumed.pane)).sort(), files.slice(0, 2).map(file => realpathSync(file)).sort(), 'with its document tabs');
-    await waitFor(() => [killed.editor, killed.hunk].filter(pane => windowOf(pane) !== windowOf(resumed.pane)).every(pane => hidden(pane) === '1'),
-      'the one not beside the resumed Pi waits hidden again');
+    assert.deepEqual(docPanes(resumed.pane), [dirty.editor], 'adopted, not reopened');
+    assert.deepEqual(await lib.documents(resumed.pane), [realpathSync(files[8])], 'with its document tab');
+
+    // A resume racing the sweep of its dead Pi: whatever it adopts is never closed under it.
+    const racing = await withPreviews('gone-race', [files[9]]);
+    piDied(racing.pane);
+    const [, successor] = await Promise.all([helper('sweep'), otherPi('gone-race')]);
+    created.push(successor.pane);
+    await helper('sweep');
+    await sleep(500);
+    for (const pane of [...docPanes(successor.pane), ...diffPanes(successor.pane)]) assert.ok(alive(pane), `${pane}, adopted, still runs`);
+    for (const pane of [racing.editor, racing.hunk]) {
+      assert.ok(!alive(pane) || [...docPanes(successor.pane), ...diffPanes(successor.pane)].includes(pane), `${pane} is closed or adopted`);
+    }
+  } finally {
+    for (const [id, tag] of [...panes('@pi_doc_owner'), ...panes()]) if (created.includes(tag)) try { tmux('kill-pane', '-t', id); } catch {}
+    for (const pane of created) try { tmux('kill-pane', '-t', pane); } catch {}
+    git('checkout', 'tracked.txt');
+  }
+});
+
+test('closing a gone Pi\'s previews follows ownership: undrawn previews close, kept editors are not asked again and stay findable, a new Pi in the pane stops it, shared windows keep their marks', async () => {
+  const lib = await import(pathToFileURL(join(root, 'scripts/lib/diff-pane.ts')).href);
+  const files = ['own-undrawn', 'own-kept', 'own-restart', 'own-shared', 'own-lying', 'own-queued', 'own-parked'].map(name => join(dir, `${name}.md`));
+  for (const file of files) writeFileSync(file, `# ${basename(file)}\n`);
+  const created = [];
+  const alive = id => panes().some(([pane]) => pane === id);
+  const opt = (pane, name, scope = '-p') => tmux('show-options', `${scope}qv`, '-t', pane, name);
+  const helper = (...args) => promisify(execFile)(process.execPath, ['--no-warnings', join(root, 'scripts/tmux-tabs.mjs'), ...args]);
+  async function withPreviews(session, file) {
+    const pi = await otherPi(session);
+    created.push(pi.pane);
+    await pi.ext.commands.get('edit').handler(file, pi.ctx);
+    await tool('edit', () => appendFileSync(join(repo, 'tracked.txt'), `${session}\n`), pi.ctx, pi.ext, { path: 'tracked.txt' });
+    const [editor] = docPanes(pi.pane), [hunk] = diffPanes(pi.pane);
+    assert.ok(editor && hunk, `${session}: an editor and a Hunk`);
+    return { ...pi, editor, hunk };
+  }
+  try {
+    // Previews Pi owned but had not drawn yet (no Panels row, no waiting mark) when it died close too.
+    const undrawn = await withPreviews('own-undrawn', files[0]);
+    for (const pane of [undrawn.editor, undrawn.hunk]) {
+      tmux('set-option', '-pu', '-t', pane, '@pi_panels');
+      tmux('set-option', '-wu', '-t', pane, '@pi_preview_window');
+      tmux('set-option', '-wu', '-t', pane, '@pi_panels');
+    }
+    piDied(undrawn.pane);
+    await helper('sweep');
+    await waitFor(() => !alive(undrawn.editor) && !alive(undrawn.hunk), 'an undrawn editor and Hunk of a dead Pi close');
+
+    // An editor kept for a gone Pi is marked so, and later sweeps leave it alone even once it is saved.
+    const keeping = await withPreviews('own-kept', files[1]);
+    tmux('send-keys', '-t', keeping.editor, 'G', 'o', 'kept text', 'Escape');
+    await waitFor(() => screen(keeping.editor).includes('kept text'), 'typed');
+    piDied(keeping.pane);
+    await helper('sweep');
+    await waitFor(() => !alive(keeping.hunk) && opt(keeping.editor, '@pi_kept_for') === keeping.pane, 'the Hunk closes; the editor is kept and marked');
+    assert.equal(opt(keeping.editor, '@pi_preview_window', '-w'), '', 'shown in the Windows row');
+    tmux('send-keys', '-t', keeping.editor, ':w', 'Enter');
+    await sleep(300);
+    await helper('sweep');
+    await sleep(500);
+    assert.ok(alive(keeping.editor), 'a kept editor is not asked to quit again by every sweep');
+
+    // A new Pi recording itself in the dead Pi's pane while the sweep waits on an editor that does not
+    // answer: what remains is the new Pi's to adopt, not closed under it.
+    const restart = await withPreviews('own-restart', files[2]);
+    await restart.ext.commands.get('panel').handler('edit', restart.ctx);   // the editor beside Pi, asked first
+    const order = tmux('list-panes', '-a', '-F', '#{pane_id}').split('\n');
+    assert.ok(order.indexOf(restart.editor) < order.indexOf(restart.hunk), 'the sweep reaches the editor before the Hunk');
+    piDied(restart.pane);
+    // The sweep's Neovim client stands in for an editor that does not answer for two seconds.
+    const slow = join(dir, 'slow-nvim');
+    mkdirSync(slow, { recursive: true });
+    writeFileSync(join(slow, 'nvim'), '#!/bin/sh\nsleep 2\nexit 1\n');
+    chmodSync(join(slow, 'nvim'), 0o755);
+    const sweeping = promisify(execFile)(process.execPath, ['--no-warnings', join(root, 'scripts/tmux-tabs.mjs'), 'sweep'],
+      { env: { ...process.env, PATH: `${slow}:${process.env.PATH}` } });
+    await waitFor(() => !opt(restart.editor, '@pi_preview_window', '-w') && !opt(restart.editor, '@pi_panels'), 'the sweep reaches the editor');
+    tmux('set-option', '-p', '-t', restart.pane, '@pi_pid', `${process.pid} ${tmux('display-message', '-p', '-t', restart.pane, '#{pane_pid}')}`);
+    await sweeping;
+    assert.ok(alive(restart.hunk), 'the Hunk, which the new Pi would adopt, still runs');
+    assert.ok(alive(restart.editor), 'the editor that did not answer is kept');
+
+    // An editor that accepts the quit but then does not exit (its quit failing later) is left findable:
+    // shown in the Windows row, with no row of the gone Pi. The sweep's client stands in for that answer.
+    const lying = await withPreviews('own-lying', files[4]);
+    assert.equal(opt(lying.editor, '@pi_preview_window', '-w'), '1', 'the editor waits in a hidden window');
+    const liar = join(dir, 'quit-nvim');
+    mkdirSync(liar, { recursive: true });
+    writeFileSync(join(liar, 'nvim'), '#!/bin/sh\necho quit\n');
+    chmodSync(join(liar, 'nvim'), 0o755);
+    piDied(lying.pane);
+    await promisify(execFile)(process.execPath, ['--no-warnings', join(root, 'scripts/tmux-tabs.mjs'), 'sweep'],
+      { env: { ...process.env, PATH: `${liar}:${process.env.PATH}` } });
+    assert.ok(alive(lying.editor) && !alive(lying.hunk), 'the Hunk closed; the editor still runs');
+    assert.deepEqual([opt(lying.editor, '@pi_preview_window', '-w'), opt(lying.editor, '@pi_panels'), opt(lying.editor, '@pi_panels', '-w')], ['', '', ''],
+      'it is an ordinary window, without the gone Pi\'s row');
+
+    // Two sweeps queued on one editor: the first keeps it (standing in for unsaved text), which is then
+    // saved; the second, which saw it before it was kept, leaves it as the ordinary window it now is.
+    const queued = await withPreviews('own-queued', files[5]);
+    const keeper = join(dir, 'kept-nvim');
+    mkdirSync(keeper, { recursive: true });
+    writeFileSync(join(keeper, 'nvim'), '#!/bin/sh\nsleep 2\necho kept\n');
+    chmodSync(join(keeper, 'nvim'), 0o755);
+    piDied(queued.pane);
+    const firstSweep = promisify(execFile)(process.execPath, ['--no-warnings', join(root, 'scripts/tmux-tabs.mjs'), 'sweep'],
+      { env: { ...process.env, PATH: `${keeper}:${process.env.PATH}` } });
+    await waitFor(() => !opt(queued.editor, '@pi_preview_window', '-w'), 'the first sweep reaches the editor');
+    const secondSweep = helper('sweep');   // collects the editor while the first still holds the locks
+    await firstSweep;
+    assert.equal(opt(queued.editor, '@pi_kept_for'), queued.pane, 'the first sweep kept it');
+    await secondSweep;
+    await sleep(500);
+    assert.ok(alive(queued.editor), 'the second sweep does not close an editor already kept');
+
+    // A Pi quitting while its editor, with unsaved text, waits in a window where another Pi now runs and
+    // cannot come back beside it: that window keeps the other Pi's mark and fallback row.
+    const parting = await withPreviews('own-parked', files[6]);
+    const parkedWindow = tmux('display-message', '-p', '-t', parting.editor, '#{window_id}');
+    tmux('send-keys', '-t', parting.editor, 'G', 'o', 'parked text', 'Escape');
+    await waitFor(() => screen(parting.editor).includes('parked text'), 'typed');
+    const resident = tmux('split-window', '-d', '-P', '-F', '#{pane_id}', '-t', parting.editor, '-c', repo, 'sleep 100000');
+    created.push(resident);
+    const prior = process.env.TMUX_PANE;
+    process.env.TMUX_PANE = resident;
+    const residentExt = await load().finally(() => { process.env.TMUX_PANE = prior; });
+    const residentCtx = { ...context, sessionManager: { getSessionId: () => 'own-parked-resident' } };
+    await fire('session_start', { reason: 'startup' }, residentCtx, residentExt);
+    await residentExt.commands.get('edit').handler(files[6], residentCtx);
+    await waitFor(() => opt(parkedWindow, '@pi_window', '-w') && opt(parkedWindow, '@pi_panels', '-w'), 'the resident Pi marks its window with its row');
+    const residentRow = opt(parkedWindow, '@pi_panels', '-w');
+    tmux('kill-pane', '-t', parting.hunk);   // nothing beside the quitting Pi, so its editor would join it
+    const partingWindow = tmux('display-message', '-p', '-t', parting.pane, '#{window_id}');
+    tmux('resize-window', '-t', partingWindow, '-x', '2');   // too narrow: join-pane fails
+    await fire('session_shutdown', { reason: 'quit' }, parting.ctx, parting.ext);
+    assert.equal(tmux('display-message', '-p', '-t', parting.editor, '#{window_id}'), parkedWindow, 'the editor stays where it waited');
+    assert.ok(screen(parting.editor).includes('parked text'), 'with its unsaved text');
+    assert.deepEqual([opt(parkedWindow, '@pi_window', '-w'), opt(parkedWindow, '@pi_panels', '-w')], ['1', residentRow],
+      'the resident Pi keeps its window mark and fallback row');
+
+    // Two Pis in one window: one quitting leaves the window marked as the other's.
+    const first = await otherPi('own-shared');
+    created.push(first.pane);
+    await first.ext.commands.get('edit').handler(files[3], first.ctx);
+    const second = tmux('split-window', '-d', '-P', '-F', '#{pane_id}', '-t', first.pane, '-c', repo, 'sleep 100000');
+    created.push(second);
+    const before = process.env.TMUX_PANE;
+    process.env.TMUX_PANE = second;
+    const ext = await load().finally(() => { process.env.TMUX_PANE = before; });
+    const ctx = { ...context, sessionManager: { getSessionId: () => 'own-shared-other' } };
+    await fire('session_start', { reason: 'startup' }, ctx, ext);
+    await waitFor(() => opt(second, '@pi_window', '-w'), 'the window is marked as running Pi');
+    await fire('session_shutdown', { reason: 'quit' }, first.ctx, first.ext);
+    assert.equal(opt(second, '@pi_owner'), '1', 'the other Pi is still marked');
+    assert.ok(opt(second, '@pi_window', '-w'), 'the window keeps its Pi mark while another Pi runs there');
   } finally {
     for (const [id, tag] of [...panes('@pi_doc_owner'), ...panes()]) if (created.includes(tag)) try { tmux('kill-pane', '-t', id); } catch {}
     for (const pane of created) try { tmux('kill-pane', '-t', pane); } catch {}
@@ -1971,7 +2135,7 @@ export default function (pi) {
   }
 });
 
-test('interactive Pi stopped by SIGTERM in a pane that survives leaves its saved editor and Hunk visible, with their document tabs', async () => {
+test('interactive Pi stopped by SIGTERM in a pane that survives closes its saved editor and Hunk, with their windows and rows', async () => {
   const e2e = realpathSync(mkdtempSync(join(tmpdir(), 'diff-pane-signal-')));
   const work = join(e2e, 'repo');
   const socket = `pi-diff-signal-${process.pid}`;
@@ -2024,13 +2188,10 @@ export default function (pi) {
     await until(() => { try { process.kill(pid, 0); return false; } catch { return true; } }, 'Pi exits on SIGTERM');
     const panes = () => t('list-panes', '-a', '-F', '#{pane_id}').split('\n');
     assert.ok(panes().includes(pi), 'its pane stays, running the shell\'s sleep');
-    await until(() => opt(diff, '@pi_preview_window', '-w') === '', 'the Hunk window is shown again');
-    assert.ok(panes().includes(doc) && panes().includes(diff), 'the saved editor and the Hunk keep running');
-    assert.deepEqual([opt(doc, '@pi_panels'), opt(diff, '@pi_panels'), opt(pi, '@pi_panels'), opt(pi, '@pi_owner')], ['', '', '', ''],
+    await until(() => !panes().includes(doc) && !panes().includes(diff), 'the saved editor and the Hunk close');
+    assert.equal(t('list-windows', '-a', '-F', '#{window_id}').split('\n').length, 2, 'only the spare window and Pi\'s remain: no preview window is left in the Windows row');
+    assert.deepEqual([opt(pi, '@pi_panels'), opt(pi, '@pi_owner'), opt(pi, '@pi_window', '-w'), opt(pi, '@pi_panels', '-w')], ['', '', '', ''],
       'no row or Pi mark of the stopped Pi remains');
-    assert.deepEqual(opt(doc, '@pi_docs').split('\n').sort(), docs, 'the editor keeps every document tab for a resume');
-    assert.equal(opt(doc, '@pi_doc_owner'), pi, 'still tagged for adoption');
-    assert.ok(opt(doc, '@pi_session'), 'with its session');
     assert.match(opt(pi, '@pi_pid'), / left$/, 'the departure is marked');
   } finally {
     try { t('kill-server'); } catch {}

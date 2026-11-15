@@ -118,8 +118,8 @@ async function confirmWindow(window, client) {
     'Close window', 'c', again('kill-window', window, client));
 }
 
-// An editor with unsaved text in the window moves to its own window first. Previews of a Pi that ran
-// there stay for a resume of its session, as ordinary windows (releaseOrphans).
+// An editor with unsaved text in the window moves to its own window first. Previews elsewhere of a Pi
+// that ran there close, unless an editor holds unsaved text (releaseOrphans).
 async function killWindow(window) {
   const rows = await allPanes(`#{pane_id}\t#{window_id}\t#{${DOC_OWNER}}`);
   for (const [id, inWindow, doc] of rows) {
