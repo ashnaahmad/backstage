@@ -6,6 +6,9 @@ When `quality_review` is available, pass the short brief below in `brief` and re
 
 Request a focused independent investigation when a concrete observation leaves a consequential decision unresolved. Give the investigator the decision, the suspected cost and what a change must preserve, and leave them room to conclude that the current design is worth keeping.
 
+- **Test maintenance.** A change to one behaviour requires edits in three suites. Which tests, if any, could we remove or combine while still catching each regression those suites catch today?
+- **Information hiding.** Three callers inspect a module’s internal state to choose their next operation. Would moving that decision behind the interface make changes easier while preserving the behaviour each caller needs?
+
 Prepare a short brief with:
 
 - The requested behaviour, preserved guarantees and governing design rationale; identify genuine open questions. Supply relevant project sources directly, not just the implementer’s summary.
