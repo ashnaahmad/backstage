@@ -64,7 +64,7 @@ def run_pi(command, root, prompt, response_limit, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="openai/gpt-6.1-sol")
+    parser.add_argument("--model", default="openai/gpt-6.2-sol")
     parser.add_argument("--review", action="store_true")
     parser.add_argument("--output", type=Path, required=True,
                         help="Save visible tool calls and responses for inspection")

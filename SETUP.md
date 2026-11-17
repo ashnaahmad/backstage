@@ -2,12 +2,38 @@
 
 Global Pi setup, assessed on 26 October 2026. A fresh-computer/account rehearsal remains outstanding. See [migration requirements](REQUIREMENTS.md) for external dependencies, observed versions and optional features.
 
+## GPT-6.2 models
+
+Refresh the built-in catalog with `pi update --models`.
+Pi 1.5.2 supports `openai/gpt-6.2-astra` and
+`openai/gpt-6.2-sol` through the existing ChatGPT login.
+The enabled model list and OpenAI quality reviewer use
+6.2; the default Claude implementer remains unchanged.
+Both models completed a short authenticated request on
+17 November 2026, and the interactive picker exposed both.
+The subscription catalog advertises 272K context; this
+check did not exercise the context limit.
+
+Existing sessions retain their selected model. When idle,
+use `/model` to select the new model and verify the footer.
+An in-memory cycling scope can survive `/reload`; use
+`/scoped-models` to update it. Check older checkouts for
+local `.pi/settings.json` overrides before relying on the
+global selection. Do not interrupt active turns or drafts.
+
+[Official migration guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6.2-astra)
+requires Responses for tools and supported reasoning
+levels. Preserve conversation prefixes when continuing:
+editing earlier instructions or downgrading models can
+discard retained reasoning. Do not rewrite saved sessions
+to install new guidance.
+
 ## Restore the workspace
 
-Clone `https://github.com/ashnaahmad/backstage.git` into a dedicated directory and run these commands from its root. Install Git, Python 3 for the probes, and Node.js >=22.19.0 with npm. The current machine uses Node 25.3.0, Pi 1.4.0 and Claude Code 2.1.304.
+Clone `https://github.com/ashnaahmad/backstage.git` into a dedicated directory and run these commands from its root. Install Git, Python 3 for the probes, and Node.js >=22.19.0 with npm. The current machine uses Node 25.3.0, Pi 1.5.2 and Claude Code 2.1.304.
 
 ```sh
-npm install -g @earendil-works/pi-coding-agent@1.4.0
+npm install -g @earendil-works/pi-coding-agent@1.5.2
 ```
 
 Install Claude Code using its supported installer and sign in with the account intended for the new computer. Claude login is separate from Pi's GPT login. Run Pi in this checkout and use its login flow for the intended ChatGPT subscription. Verify available models and account entitlements for your accounts; the sample model selection is configurable.

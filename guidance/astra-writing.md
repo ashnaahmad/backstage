@@ -37,6 +37,10 @@ Some work calls for an incisive, personal argument. Other work may need neutral 
 5. After revision, compare the complete draft with that record. Check that each added detail serves the argument and that the prose actually implements the requested change. Reread the neighbouring paragraphs: a locally clearer sentence may break the transition or repeat an explanation. A good explanation of the failure is not evidence that the next draft fixes it.
 6. Cut repetition and secondary detail before removing the framing that makes the examples intelligible. Count the complete answer mechanically. Check whether the word limit actually requires losing the opening or ending before cutting them.
 
+## GPT-6.2 calibration
+
+The [GPT-6.2 guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6.2-astra) describes a more concise default and possible leakage of working shorthand into replies. Keep enough context to explain the result; do not add blanket pressure to shorten. Write human-facing handoffs and final answers for their reader, expanding working abbreviations and preserving ordinary spacing. These adjustments complement the observed writing lessons above rather than replacing them.
+
 ## Use and calibration
 
 Pi's [writing skill](../skills/writing/SKILL.md) points here for drafting and revision with an author; it is read when a writing task brings that skill in, not injected into every session. GPT/OpenAI models use this guide; Claude models use the Claude guide. Keep the user's current brief authoritative. Avoid repetitive contrast formulas such as “not X but Y” when direct statements carry the distinction more naturally.

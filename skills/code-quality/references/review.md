@@ -98,7 +98,7 @@ A clean review is valid.' \
   < "$brief"
 ```
 
-For OpenAI, use `openai/gpt-6.1-sol` and omit `-e "$bridge"`. The pinned bridge is installed globally at `~/.pi/agent/npm/node_modules/pi-claude-bridge/src/index.ts`, the same copy `quality_review` uses (`QUALITY_BRIDGE` overrides it). The shell transport works outside Pi too; it needs no custom quality extension.
+For OpenAI, use `openai/gpt-6.2-sol` and omit `-e "$bridge"`. The pinned bridge is installed globally at `~/.pi/agent/npm/node_modules/pi-claude-bridge/src/index.ts`, the same copy `quality_review` uses (`QUALITY_BRIDGE` overrides it). The shell transport works outside Pi too; it needs no custom quality extension.
 
 The child can read and investigate with shell tools. The review-only instruction is a working agreement, not a filesystem sandbox: use a disposable worktree for risky probes. Inspect the actual diff afterwards. Disable unrelated integrations and context discovery to avoid importing the implementer's argument or personal context, but provide relevant project guidance explicitly in the brief.
 

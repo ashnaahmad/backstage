@@ -11,9 +11,9 @@
     "claude-bridge/claude-opus-5-5",
     "claude-bridge/claude-sonnet-5-5",
     "claude-bridge/claude-fable-5-2",
-    "openai/gpt-6.1-sol",
+    "openai/gpt-6.2-sol",
     "openai/gpt-6-luna",
-    "openai/gpt-6-astra"
+    "openai/gpt-6.2-astra"
   ],
   "defaultProvider": "claude-bridge",
   "defaultModel": "claude-opus-5-5"

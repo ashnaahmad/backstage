@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 export function reviewModel(provider, override) {
   if (override) return override;
   if (provider === 'openai') return 'claude-bridge/claude-opus-5-5';
-  if (provider === 'anthropic' || provider === 'claude-bridge') return 'openai/gpt-6.1-sol';
+  if (provider === 'anthropic' || provider === 'claude-bridge') return 'openai/gpt-6.2-sol';
   throw new Error('Choose a reviewer model explicitly for this provider.');
 }
 

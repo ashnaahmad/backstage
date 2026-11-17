@@ -92,7 +92,7 @@ def run_check(bridge):
             pi, "--mode", "rpc", "--no-session", "--no-approve",
             "--no-extensions", "-e", str(bridge), "--tools", "read",
             "--no-mcp", "--no-skills", "--no-context-files",
-            "--no-prompt-templates", "--model", "openai/gpt-6.1-sol",
+            "--no-prompt-templates", "--model", "openai/gpt-6.2-sol",
         ]
         records = queue.Queue()
         with tempfile.TemporaryFile() as stderr:
@@ -112,7 +112,7 @@ def run_check(bridge):
                     "once using read. Remember its content, but do not quote it. "
                     "Reply only: Read alpha",
                 }, True)
-                turns.append(inspect_turn(first, "gpt-6.1-sol", "alpha.md", alpha))
+                turns.append(inspect_turn(first, "gpt-6.2-sol", "alpha.md", alpha))
                 assert turns[-1]["answer"] == "Read alpha"
                 (cwd / "alpha.md").unlink()
                 exchange(process, records, {
@@ -132,14 +132,14 @@ def run_check(bridge):
                 (cwd / "beta.md").unlink()
                 exchange(process, records, {
                     "type": "set_model", "provider": "openai",
-                    "modelId": "gpt-6.1-sol",
+                    "modelId": "gpt-6.2-sol",
                 })
                 third = exchange(process, records, {
                     "type": "prompt",
                     "message": "Both files are gone. Without tools, return only "
                     'a JSON object with the remembered "alpha" and "beta" values.',
                 }, True)
-                turns.append(inspect_turn(third, "gpt-6.1-sol", None, None))
+                turns.append(inspect_turn(third, "gpt-6.2-sol", None, None))
                 assert json.loads(turns[-1]["answer"]) == {"alpha": alpha, "beta": beta}
                 return {"passed": True, "turns": turns}
             finally:

@@ -18,7 +18,7 @@ const final = text => JSON.stringify({ type: 'message_end', message: {
 
 test('opposite-provider defaults; unknown provider needs an explicit choice', () => {
   assert.equal(reviewModel('openai'), 'claude-bridge/claude-opus-5-5');
-  assert.equal(reviewModel('claude-bridge'), 'openai/gpt-6.1-sol');
+  assert.equal(reviewModel('claude-bridge'), 'openai/gpt-6.2-sol');
   assert.throws(() => reviewModel('unknown'));
   assert.equal(reviewModel('unknown', 'chosen/model'), 'chosen/model');
 });
@@ -32,7 +32,7 @@ test('real child gets isolated arguments and exact brief; only final text return
     const output=JSON.stringify({type:'message_end',message:{role:'assistant',stopReason:'stop',content:[{type:'thinking',thinking:'private'},{type:'text',text}]}});
     process.stdout.write(output.slice(0,17));
     setTimeout(()=>process.stdout.write(output.slice(17)),10);`);
-  for (const model of ['openai/gpt-6.1-sol', 'claude-bridge/claude-opus-5-5']) {
+  for (const model of ['openai/gpt-6.2-sol', 'claude-bridge/claude-opus-5-5']) {
     const result = await runReview({ cwd:f.cwd, model, bridge:'/bridge with spaces/index.ts',
       brief:'Original request\n$(not a shell command)', instructions:'Review only' }, f.executable);
     const received = JSON.parse(result.text);
