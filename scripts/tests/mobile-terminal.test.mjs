@@ -171,6 +171,54 @@ test('buttons act on the phone client\'s window and pane', { skip: !REAL && 'tmu
   }
 });
 
+test('Text sends the active pane\'s text to the phone only, leaving no paste buffer', { skip: !REAL && 'tmux is not installed' }, async () => {
+  const { dir, stub, env } = sandbox();
+  const innerSock = join(dir, 'inner.sock'), outerSock = join(dir, 'outer.sock');
+  writeFileSync(join(dir, 'inner.conf'), `source-file ${join(root, 'tmux/pi-tabs.conf')}\n`);
+  stub('tmux', `unset TMUX TMUX_PANE\nexec '${REAL}' -S '${innerSock}' -f '${join(dir, 'inner.conf')}' "$@"`);
+  const call = sock => (...args) => execFileSync(REAL, ['-S', sock, ...args], { env, encoding: 'utf8' }).trim();
+  const inner = call(innerSock), outer = call(outerSock);
+  assert.ok(!('TMUX' in env) && innerSock.startsWith(dir) && outerSock.startsWith(dir), 'isolated before anything runs');
+  // A dummy link longer than the pane, which the terminal wraps, and a line from earlier output.
+  const link = `https://example.com/callback?state=${'d'.repeat(90)}&code=dummy`;
+  try {
+    inner('-f', join(dir, 'inner.conf'), 'new-session', '-d', '-s', 'pi-workspace', '-x', '60', '-y', '10',
+      `printf 'earlier line %s\\n' $(seq 30); printf '%s\\n' '${link}'; exec sleep 100000`);
+    // Both terminals report xterm, whose clipboard sequence tmux sends; each records what it receives.
+    const terminal = (name, command) => {
+      outer('-f', '/dev/null', 'new-session', '-d', '-s', name, '-x', '60', '-y', '20', '/bin/sh', '-c', `TERM=xterm-256color ${command}; sleep 100000`);
+      outer('pipe-pane', '-o', '-t', name, `cat > '${join(dir, name)}'`);
+      return outer('display-message', '-p', '-t', name, '#{pane_tty}');
+    };
+    const desktop = terminal('desktop', 'tmux attach -t =pi-workspace');
+    await until(() => inner('list-clients', '-F', '#{client_name}').includes(desktop), 'the desktop attaches');
+    const realBin = join(dir, 'real');
+    mkdirSync(realBin);
+    execFileSync('ln', ['-s', REAL, join(realBin, 'tmux')]);
+    const phone = terminal('phone', `PATH='${realBin}':"$PATH" PI_MOBILE_TMUX_SOCKET='${innerSock}' sh '${script}' attach pi-workspace`);
+    await until(() => inner('list-clients', '-F', '#{client_name}').includes(phone), 'the phone attaches');
+    await sleep(500);
+
+    outer('send-keys', '-t', 'phone', '-l', '\x1b[9011~');
+    const sent = () => {
+      const match = readFileSync(join(dir, 'phone'), 'latin1').match(/\x1b\]52;[^;]*;([A-Za-z0-9+/=]*)\x07/);
+      return match && Buffer.from(match[1], 'base64').toString('utf8');
+    };
+    await until(() => sent(), 'the phone receives the text');
+    const text = sent();
+    assert.ok(text.endsWith('\n--pi-mobile-text--'), 'marked as the reply to Text');
+    assert.ok(text.split('\n').includes(link), 'the wrapped link arrives as one line');
+    assert.ok(!inner('capture-pane', '-p', '-t', 'pi-workspace').includes('earlier line 1\n'), 'the first line has scrolled away');
+    assert.ok(text.startsWith('earlier line 1\n'), 'the text includes the pane\'s history');
+    await sleep(300);
+    assert.ok(!readFileSync(join(dir, 'desktop'), 'latin1').includes('\x1b]52;'), 'the desktop receives nothing');
+    assert.equal(inner('list-buffers'), '', 'no paste buffer is left');
+  } finally {
+    for (const stop of [outer, inner]) try { stop('kill-server'); } catch {}
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('install and uninstall touch only their own service and Serve route', () => {
   const { dir, stub, env } = sandbox();
   const serve = join(dir, 'serve.json'), calls = join(dir, 'calls');

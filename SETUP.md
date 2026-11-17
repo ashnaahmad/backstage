@@ -107,6 +107,16 @@ works) and [a bar above the terminal](mobile/page.js):
   elsewhere. The field holds one line, so pasted line breaks
   (which could act as Return) do not reach the terminal; control
   characters are refused.
+- **Text:** shows the active pane's text (its last 1,000 lines of
+  history and the screen) as ordinary page text: the terminal itself
+  offers no selection on iPhone. Drag sideways to read rows wider
+  than the screen; hold on the text to select it, then use the
+  menu's Copy, or **Copy** or **Copy as one line**, which removes
+  the line breaks and the spaces around them, for a link that Pi or
+  another program broke across rows. tmux sends the text only to
+  this page, as a clipboard sequence (OSC 52) that the page accepts
+  only just after Text is pressed, and does not keep it among its
+  paste buffers. **Close** clears it from the page.
 - **Sidebar**, **−** and **+:** open or close the Sessions sidebar
   in the window shown, as Ctrl+Q does, and narrow or widen it by
   5 columns until it closes.
@@ -137,14 +147,20 @@ sidebar gives its columns to the pane beside it, which can leave
 another pane very narrow; Focus shows that pane at full width.
 
 Tests: `node --test scripts/tests/mobile-terminal.test.mjs`
-(disposable tmux servers; stub `launchctl` and `tailscale`). Checked
+(disposable tmux servers; stub `launchctl` and `tailscale`). On
+17 November 2026, in Chromium's iPhone 13 emulation against a
+disposable workspace with Pi and ttyd: the terminal fits the screen
+(the page's layout had kept it wider, cutting off the right of every
+row), and Text with Copy as one line copied a dummy 186-character
+link that Pi had broken across five rows. Checked
 on 30 October 2026 in Chromium's iPhone 13 emulation against a
 disposable workspace with the real pi-secrets prompt and Markdown
 editor, and with a real LaunchAgent under a test label (started
 by bootstrap, restarted by KeepAlive from its copy after the
 source was deleted, removed by uninstall).
 Earlier, the trial's masked field delivered a real token from an
-iPhone. Not yet confirmed: the buttons, tapping a pane and the
+iPhone. Not yet confirmed: holding to select in Text and its copy buttons
+on the iPhone itself, the buttons, tapping a pane and the
 keyboard staying open after a button press on the iPhone itself,
 and the service starting at login after a real restart
 (`RunAtLoad` is configured, not yet exercised).
