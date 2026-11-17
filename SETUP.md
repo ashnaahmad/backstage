@@ -402,6 +402,52 @@ Link `pi/prompts/browser-verify.md` the same way. Invoke
 configuration of a running application; it adds the same
 scope check plus read-back evidence and stop-at-gate rules.
 
+## Session snapshot
+
+`ccmux last` can print an older reply while a newer instruction
+to the same session is still unanswered. For an orchestrator
+polling a Pi session, run:
+
+```sh
+since=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)   # just before ccmux send
+scripts/session-snapshot.mjs pi_pane12 --since "$since"
+scripts/session-snapshot.mjs %12 --json --no-text
+```
+
+The session is matched exactly by ccmux id, `%pane` or Pi
+session id, and checked against the transcript header. Activity
+is what the running ccmux daemon's `GET /sessions` reports
+(usually the Pi extension's marker, sometimes pane rules); the
+script never starts or replaces the daemon and honours
+`CCMUX_PORT`. The Pi transcript is read backwards along
+`parentId` from the newest persisted entry, so a branch that
+later entries left is excluded; `/tree` navigation with nothing
+written since is not visible. The output gives that activity,
+the latest user message (typed, sent with `ccmux send`, or sent
+by an extension as user input), what followed it, the latest
+finished reply and its order, with entry IDs and timestamps,
+then a verdict about the persisted path and reported activity:
+`reply-observed`, `reply-observed-still-working`,
+`in-progress`, `interrupted`, `errored-no-reply` (Pi may still
+retry), `ended-without-reply`, `idle-without-reply`,
+`no-user-message-since` or `unknown`, with notes on anything
+uncertain.
+
+A reply after the user message shows order, not fulfilment.
+An extension message after the reply, which may have started a
+turn, makes the verdict `unknown`. `--since` is an observation
+window: queued input is not in the transcript until Pi delivers
+it, several messages in the window are listed rather than
+paired, and absence is reported only when the whole path was
+read and every message is dated. Only `text` blocks are output;
+`--no-text` also drops those. Other agents get ccmux activity
+and `unknown`.
+
+It needs Node 18 or later, works with running sessions, and
+changes nothing. Rollback: delete the script. Tests (Pi in RPC
+mode with a scripted model, a stub daemon on a free port, no
+tmux): `node --test scripts/tests/session-snapshot.test.mjs`.
+
 ## Terminal session sidebar and browser QA
 
 Installed trial: ccmux 1.4.4, tmux 3.8 and

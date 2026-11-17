@@ -11,3 +11,7 @@ Keep documentation consolidated around current state. Distinguish implementation
 Tests must not reach a live tmux workspace or overwrite user configuration. Give each disposable tmux server an explicit `-L` or `-S` socket, unset `TMUX` and `TMUX_PANE`, and ensure every command targets that socket. Code that invokes bare `tmux` needs a wrapper selecting the test server. Never run `kill-server` without an explicit test socket.
 
 Use temporary HOME, XDG and ccmux state directories and a separate daemon port for ccmux tests. Review third-party test setup before running it. Do not install packages, restart user services or deploy cloud resources as a side effect of ordinary tests.
+
+## Session snapshots
+
+For Pi coordination, use `scripts/session-snapshot.mjs <session-id|%pane>` to distinguish an older reply from newer user messages and ccmux-reported activity. Its verdict concerns persisted history, not task fulfilment; see [SETUP.md](SETUP.md#session-snapshot) for usage and limits.

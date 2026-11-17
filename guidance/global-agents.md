@@ -11,3 +11,5 @@ Use the code-quality skill for code and the writing skill for prose. Load detail
 Preserve unrelated work and respect project Git permissions. Configure credentials separately. Keep shared guidance free of customer data and machine-specific paths.
 
 When testing tmux or ccmux, use an explicitly named isolated server and temporary configuration and state directories. Never let tests reach the user's live workspace.
+
+When coordinating Pi sessions, `ccmux last` may show a reply older than the latest user message. Use `<harness>/scripts/session-snapshot.mjs <session>` to see their order alongside reported activity. A later reply does not establish task fulfilment; the snapshot describes persisted history and cannot see unsaved `/tree` navigation.
