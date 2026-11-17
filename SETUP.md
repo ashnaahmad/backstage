@@ -448,6 +448,77 @@ changes nothing. Rollback: delete the script. Tests (Pi in RPC
 mode with a scripted model, a stub daemon on a free port, no
 tmux): `node --test scripts/tests/session-snapshot.test.mjs`.
 
+## Coordination record
+
+`scripts/coordination-record.mjs` keeps one local record of
+delegated work: the accountable owner, implementing session and
+checkout writer (three roles, transferred separately), parent
+and dependencies (`includes`, `awaits-handoff`, `slot-order`,
+`note`), pinned inputs, the current blocker or handoff, and
+evidence. `map` and `handoff` are generated from it, together
+with the checkout's state observed now. Actors are self-reported.
+The brief stays the authority for requirements; the record holds
+operational fields and evidence references.
+
+```sh
+# Keep the record outside any repository.
+export COORDINATION_RECORD=~/agent-briefs/coord.json
+export COORDINATION_ACTOR=orchestrator
+R=scripts/coordination-record.mjs
+$R init
+$R assign feat --title "Feature" \
+  --accountable orchestrator --implementer pi-12 \
+  --brief brief.md
+$R checkout feat --path ../feat-checkout \
+  --cover src --cover test --writer pi-12 \
+  --expect-rev 1
+COORDINATION_ACTOR=pi-12 $R evidence feat \
+  --check unit --result pass \
+  --scope "source-only unit tests" \
+  --exclusion "live app" --ref unit.log --capture
+$R inspect E1 --note "read unit.log"
+$R transfer feat --role writer --to pi-14 \
+  --expect-rev 2 --note "prepared checkout"
+$R handoff feat
+# Also: show feat [--json], map [--json]
+```
+
+Every change that replaces recorded state needs `--expect-rev`
+(from `show`); a stale one is refused with the current roles and
+the last change. Evidence, inspections and reproductions are
+appended and never upgraded: `reproduce E1 ...` is a new claim on
+its own subject. Each evidence item names its subject: `--capture`
+(the assignment's checkout, observed now), `--receipt <file>` (an
+existing manifest or log, by path and hash; any identity it
+reports is labelled as reported) or `--subject-unknown`.
+
+Capture covers only the `--cover` paths. Git supplies HEAD, the
+branch, in-progress operations and index entries through
+read-only plumbing (no filters, hooks, fsmonitor or index
+writes); covered tracked and new non-ignored files are read and
+hashed here as raw bytes, so `assume-unchanged` and
+`skip-worktree` do not hide changes, and paths beneath a
+symlinked directory are reported as not covered. A view compares
+the evidence subject with the checkout now: unchanged; content
+unchanged with HEAD or index changed (a commit of the tested
+tree); earlier revision with the changed paths; or unknown.
+Nothing is called verified or ready, and old evidence is never
+deleted or rerun.
+
+Writes take a lock file beside the record, replace it atomically
+and keep the previous generation as `.prev`. A lock left by a
+dead writer is reported with its token. `unlock --token <token>`
+removes it only when that holder is no longer running on this
+host, one recovery at a time; for a holder on another host, stop
+its writers first.
+A malformed record is an error, never reset; recover by copying
+`.prev` over it deliberately. Symlinked or hard-linked record
+paths and records inside a Git work tree are refused.
+Rollback: stop using or revert the CLI and its guidance;
+retain the record and receipts so no evidence is lost.
+Tests (temporary repositories and records, no tmux):
+`node --test scripts/tests/coordination-record.test.mjs`.
+
 ## Terminal session sidebar and browser QA
 
 Installed trial: ccmux 1.4.4, tmux 3.8 and

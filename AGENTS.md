@@ -15,3 +15,5 @@ Use temporary HOME, XDG and ccmux state directories and a separate daemon port f
 ## Session snapshots
 
 For Pi coordination, use `scripts/session-snapshot.mjs <session-id|%pane>` to distinguish an older reply from newer user messages and ccmux-reported activity. Its verdict concerns persisted history, not task fulfilment; see [SETUP.md](SETUP.md#session-snapshot) for usage and limits.
+
+For assignments adopted into the coordination record, use `scripts/coordination-record.mjs` to update roles and evidence and generate maps/handoffs. Keep the record outside repositories; the brief remains the requirements authority. See [SETUP.md](SETUP.md#coordination-record). Do not migrate an active assignment without coordinating its existing authority.
