@@ -430,6 +430,12 @@ Link `pi/prompts/browser-verify.md` the same way. Invoke
 `/browser-verify` with a brief for browser verification or
 configuration of a running application; it adds the same
 scope check plus read-back evidence and stop-at-gate rules.
+It selects the installed pi-playwright skill and its
+`scripts/pw.js` wrapper explicitly, with an owned named
+session and a Chromium launch preflight before app startup.
+Application guidance's `hb` examples do not select a different
+runtime. Missing browsers are reported, not installed during
+QA. Existing Pi sessions need `/reload` after prompt changes.
 
 ## Session snapshot
 
@@ -651,6 +657,14 @@ Install the Chromium build required by the package's
 resolved Playwright CLI using that CLI's `install-browser`
 command directly (the skill wrapper adds a session argument
 which that setup command rejects).
+That is machine provisioning, not a QA-session fallback.
+Verified on 18 November 2026: pi-playwright 0.1.2 resolves
+@playwright/cli 0.1.22 and Chromium/headless-shell revision
+1247, already installed. The separate browse `hb` runtime
+requested missing revision 1208; `/browser-verify` uses the
+pi-playwright wrapper instead. Recheck the resolved package
+and browser after upgrades rather than installing an older
+revision to satisfy another runtime.
 
 Source [the shell shortcut](scripts/pi-shell.zsh) from your
 `~/.zshrc`, using the checkout's location on that machine:
