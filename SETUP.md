@@ -11,8 +11,20 @@ The enabled model list and OpenAI quality reviewer use
 6.2; the default Claude implementer remains unchanged.
 Both models completed a short authenticated request on
 17 November 2026, and the interactive picker exposed both.
-The subscription catalog advertises 272K context; this
-check did not exercise the context limit.
+The tracked [model settings](.pi/models.json) set both
+context windows to 1,050,000 tokens. Install them after
+cloning, including when using Pi outside this checkout:
+
+```sh
+node scripts/install-model-settings.mjs
+```
+
+Pi reads model settings from its global agent directory,
+not the checkout's `.pi/models.json`. The installer merges
+the tracked values into `~/.pi/agent/models.json`, preserving
+other providers and per-model settings. Pass an agent directory
+as its argument for a nonstandard installation. It does not
+copy credentials or change the generated model catalog.
 
 Existing sessions retain their selected model. When idle,
 use `/model` to select the new model and verify the footer.
@@ -20,6 +32,13 @@ An in-memory cycling scope can survive `/reload`; use
 `/scoped-models` to update it. Check older checkouts for
 local `.pi/settings.json` overrides before relying on the
 global selection. Do not interrupt active turns or drafts.
+To refresh context metadata in a running session, wait for it
+to become idle with an empty input, open `/model`, wait for
+"Model catalogs refreshed", then select the same model with
+Enter. This refreshes the selected model without restarting
+the session or reloading extensions. A direct `/model <id>`
+can reuse cached metadata. Verify the footer shows `1.1M`
+(Pi's rounded display of 1,050,000).
 
 [Official migration guidance](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6.2-astra)
 requires Responses for tools and supported reasoning
