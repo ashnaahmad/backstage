@@ -33,6 +33,9 @@ const USAGE = `usage: coordination-record.mjs <command> [options]   (--record <f
                 (--capture | --receipt <file> [--stated-identity <text>] | --subject-unknown)
   capture --path <dir> --cover <path>...          print a source identity (no record needed)
   show <id> [--json]   map [--json]   handoff <id>
+  brief [<id>] [--session <native session id>] [--json]
+                the current brief to restore into an implementing session; without <id>, the assignment
+                whose recorded implementer is exactly that session id (names are not matched)
   unlock --token <token>`;
 
 const ROLES = { accountable: 'accountable', implementer: 'implementer', writer: 'checkout writer' };
@@ -497,7 +500,92 @@ function renderAssignment(record, v, { heading = '##' } = {}) {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------- brief restoration
+
+/** Briefs are short; a larger one is pointed to rather than restored, so it is never cut silently. */
+export const BRIEF_LIMIT = 12_000;
+
+/** The recorded brief as it can be read now: only bytes whose hash matches the record are ever returned. */
+async function briefState(brief) {
+  if (!brief) return { state: 'none' };
+  let bytes;
+  try { bytes = await readFile(brief.path); } catch (error) { return { state: 'unreadable', code: error.code }; }
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  if (sha256 !== brief.sha256) return { state: 'changed', sha256 };
+  if (bytes.length > BRIEF_LIMIT) return { state: 'too-large', size: bytes.length };
+  return { state: 'current', text: bytes.toString('utf8') };
+}
+
+function briefKey(parts) {
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 16);
+}
+
+/**
+ * What an implementing session should hold as its current brief. The text restates the record; it adds no
+ * requirement of its own and says that later corrections in the conversation take precedence.
+ */
+async function restoration(record, recordPath, id, session) {
+  const sessions = session ? [session] : [];
+  let a;
+  if (id) {
+    a = getAssignment(record, id);
+  } else {
+    if (!sessions.length) throw new UsageError('brief needs an assignment id or --session');
+    const matches = Object.values(record.assignments).filter(x => x.implementer && sessions.includes(x.implementer.session));
+    if (!matches.length) {
+      return { status: 'none', assignment: null, key: briefKey(['none']),
+        text: `No assignment in ${recordPath} names ${sessions.join(' or ')} as its implementer.` };
+    }
+    if (matches.length > 1) {
+      const ids = matches.map(x => x.id).sort();
+      return { status: 'ambiguous', assignment: null, key: briefKey(['ambiguous', ids]),
+        text: `Several assignments in ${recordPath} name this session as implementer (${ids.join(', ')}). `
+          + 'No brief is restored; ask the accountable orchestrator which one this session holds.' };
+    }
+    a = matches[0];
+  }
+  const accountable = a.accountable.actor;
+  const implementer = a.implementer?.session ?? 'none';
+  if (sessions.length && !sessions.includes(implementer)) {
+    return { status: 'not-implementer', assignment: a.id, key: briefKey(['not-implementer', a.id, implementer]),
+      text: `This session (${sessions[0]}) is not the recorded implementer of assignment ${a.id} (${a.title}): the record names ${implementer}`
+        + `${a.implementer ? ` since ${a.implementer.since}` : ''}. Its brief is not restored here. `
+        + `Do not continue that assignment as yours; ask ${accountable} (accountable) what this session should do.` };
+  }
+  const brief = await briefState(a.brief);
+  const head = [`Assignment ${a.id}: ${a.title} (record rev ${a.rev}).`,
+    `Accountable: ${accountable}. Implementer: ${implementer}.`];
+  if (a.brief) head.push(`Brief: ${a.brief.path} (sha256 ${short(a.brief.sha256)}, recorded ${a.brief.recordedAt}).`);
+  const body = {
+    none: `No brief is recorded for this assignment. Its absence grants no permission and removes no constraint; ask ${accountable} for one.`,
+    unreadable: `The recorded brief cannot be read now (${brief.code}), so it is not restored. That grants no permission and removes no constraint; ask ${accountable}.`,
+    changed: `The brief file has changed since the assignment recorded it (now sha256 ${short(brief.sha256)}). `
+      + 'The recorded version is not available here and the current file is not confirmed as this assignment\'s brief, '
+      + `so neither is restored. That grants no permission and removes no constraint; ask ${accountable} which version holds.`,
+    'too-large': `The brief is ${brief.size} bytes, over the ${BRIEF_LIMIT}-byte restoration limit, so it is not restored here. `
+      + 'Read it at the path above; its hash still matches the record.',
+    current: `The recorded brief follows verbatim. Later corrections from the user or ${accountable} in this conversation `
+      + 'take precedence over it. Restating it does not show the work complies; at handoff, reconcile the result against it, '
+      + 'including anything requested but not delivered.',
+  }[brief.state];
+  // The brief's text exactly as stored; a delimiter line follows on its own line.
+  const shown = brief.state === 'current'
+    ? `\n\n----- brief -----\n${brief.text}${brief.text.endsWith('\n') ? '' : '\n'}----- end of brief -----` : '';
+  const text = [...head, '', body].join('\n') + shown;
+  return {
+    status: 'assigned', assignment: a.id, briefState: brief.state, briefPath: a.brief?.path ?? null,
+    recordedSha256: a.brief?.sha256 ?? null,
+    key: briefKey(['assigned', a.id, accountable, implementer, a.brief?.path ?? null, a.brief?.sha256 ?? null, brief.state, brief.sha256 ?? null]),
+    text,
+  };
+}
+
 const READS = {
+  async brief(record, { positional: [id], options, path }) {
+    const result = await restoration(record, path, id, options.session);
+    return options.json ? JSON.stringify(result, null, 2) : result.text;
+  },
+
   async show(record, { positional: [id], options }) {
     const a = getAssignment(record, id);
     const [view] = await buildViews(record, [id]);
@@ -548,7 +636,7 @@ export async function main(argv, env = process.env) {
     await unlock(path, options.token);
     return 'unlocked';
   }
-  if (READS[command]) return READS[command](await readRecord(path), { positional, options });
+  if (READS[command]) return READS[command](await readRecord(path), { positional, options, path });
   if (!WRITES[command]) throw new UsageError(`unknown command ${command}\n${USAGE}`);
   const actor = options.as ?? env.COORDINATION_ACTOR;
   if (!actor) throw new UsageError('name yourself with --as <actor> or COORDINATION_ACTOR (self-reported)');

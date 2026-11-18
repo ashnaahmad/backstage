@@ -418,3 +418,47 @@ test('an observation is not paired with a brief or checkout that changed while i
   assert.match(result.out, /changed \(rev 2 -> 3\) while the evidence subject was being observed; nothing was recorded/);
   assert.equal((await stored(rec, 'a')).evidence.length, 0);
 });
+
+test('brief: verbatim only when current; pointer over the limit; no brief, ambiguity and exact session ids', async () => {
+  const path = record();
+  const briefs = join(dir, `briefs${++n}`);
+  mkdirSync(briefs);
+  const small = join(briefs, 'small.md');
+  writeFileSync(small, 'Do A.\nExcluded: B.\n');
+  const large = join(briefs, 'large.md');
+  writeFileSync(large, `${'Keep this constraint.\n'.repeat(600)}FINAL CONSTRAINT AT THE END\n`);
+  await cli(path, 'o', 'init');
+  await cli(path, 'o', 'assign', 'a1', '--title', 'One', '--accountable', 'o', '--implementer', 'id-1', '--brief', small);
+  await cli(path, 'o', 'assign', 'a2', '--title', 'Two', '--accountable', 'o', '--implementer', 'id-2', '--brief', large);
+  await cli(path, 'o', 'assign', 'a3', '--title', 'Three', '--accountable', 'o', '--implementer', 'id-3');
+
+  let r = await cli(path, 'o', 'brief', '--session', 'id-1', '--json');
+  const one = JSON.parse(r.out);
+  assert.equal(one.status, 'assigned');
+  assert.ok(one.text.includes('----- brief -----\nDo A.\nExcluded: B.\n----- end of brief -----'));
+
+  // Exact text, trailing whitespace included; the delimiter goes on its own line when the brief has no final newline.
+  writeFileSync(small, 'Do A.  \n\n\tExcluded: B.');
+  await cli(path, 'o', 'update', 'a1', '--brief', small, '--expect-rev', '1');
+  r = await cli(path, 'o', 'brief', 'a1');
+  assert.ok(r.out.endsWith('----- brief -----\nDo A.  \n\n\tExcluded: B.\n----- end of brief -----'));
+
+  r = await cli(path, 'o', 'brief', 'a2');
+  assert.match(r.out, /over the 12000-byte restoration limit, so it is not restored here/);
+  assert.ok(!r.out.includes('Keep this constraint'), 'never a truncated prefix of the constraints');
+
+  r = await cli(path, 'o', 'brief', 'a3');
+  assert.match(r.out, /No brief is recorded.*grants no permission/);
+
+  r = await cli(path, 'o', 'brief', '--session', 'id', '--json');
+  assert.equal(JSON.parse(r.out).status, 'none', 'a prefix of an id does not match');
+
+  await cli(path, 'o', 'transfer', 'a3', '--role', 'implementer', '--to', 'id-1', '--expect-rev', '1');
+  r = await cli(path, 'o', 'brief', '--session', 'id-1', '--json');
+  const both = JSON.parse(r.out);
+  assert.equal(both.status, 'ambiguous');
+  assert.ok(!both.text.includes('Do A.'));
+
+  r = await cli(path, 'o', 'brief');
+  assert.equal(r.code, 2, 'needs an id or a session');
+});

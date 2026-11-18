@@ -55,7 +55,7 @@ Fable 5.2 with 1M context.
 
 Install Chrome or another renderer-supported Chromium browser for image previews. PDF/LaTeX and Studio's optional Quarto/REPL dependencies are outside the current setup. Restart Pi or `/reload`; accept project trust only after reviewing the checkout.
 
-In `~/.pi/agent/settings.json`, preserve unrelated settings and add the absolute paths of this checkout's `pi/extensions/code-quality.ts`, `pi/extensions/quality-feedback.ts`, `pi/extensions/diff-pane.ts`, `pi/extensions/idle-exit.ts` and `pi/extensions/wait.ts` to `extensions`, and the directory `skills` to `skills`. Copy the `defaultProvider`, `defaultModel` and `enabledModels` values from [.pi/settings.json](.pi/settings.json). Merge [.pi/claude-bridge.json](.pi/claude-bridge.json) into the global file of the same name. Recompute these paths after moving the checkout. `pi/extensions/` and `skills/` are deliberately not directories Pi discovers on its own: the harness loads once, from this main checkout, in every directory, including other worktrees of this branch (see [testing in a worktree](#testing-harness-changes-in-a-worktree)). Its local npm pins match the global ones.
+In `~/.pi/agent/settings.json`, preserve unrelated settings and add the absolute paths of this checkout's `pi/extensions/code-quality.ts`, `pi/extensions/quality-feedback.ts`, `pi/extensions/diff-pane.ts`, `pi/extensions/idle-exit.ts`, `pi/extensions/wait.ts` and `pi/extensions/task-brief.ts` to `extensions`, and the directory `skills` to `skills`. Copy the `defaultProvider`, `defaultModel` and `enabledModels` values from [.pi/settings.json](.pi/settings.json). Merge [.pi/claude-bridge.json](.pi/claude-bridge.json) into the global file of the same name. Recompute these paths after moving the checkout. `pi/extensions/` and `skills/` are deliberately not directories Pi discovers on its own: the harness loads once, from this main checkout, in every directory, including other worktrees of this branch (see [testing in a worktree](#testing-harness-changes-in-a-worktree)). Its local npm pins match the global ones.
 
 If migrating an existing agent setup, reconcile its quality hooks and skills with this bundle so the same guidance does not load twice. Back up settings before removing registrations.
 
@@ -225,6 +225,7 @@ pi -ne -ns -np \
   -e pi/extensions/diff-pane.ts \
   -e pi/extensions/idle-exit.ts \
   -e pi/extensions/wait.ts \
+  -e pi/extensions/task-brief.ts \
   --skill skills --prompt-template pi/prompts
 ```
 
@@ -544,6 +545,61 @@ Rollback: stop using or revert the CLI and its guidance;
 retain the record and receipts so no evidence is lost.
 Tests (temporary repositories and records, no tmux):
 `node --test scripts/tests/coordination-record.test.mjs`.
+
+### Restoring the current brief
+
+`brief <id>` prints an assignment's current brief for an agent
+to hold: identity (accountable, implementer, path, hash) and the
+recorded brief verbatim, only when the file still matches the
+recorded hash. A missing, unreadable, unrecorded or edited brief,
+or one over 12,000 bytes, is reported with its path instead of
+shown or cut; that grants no permission. The text says later
+corrections in the conversation take precedence and that the
+result is reconciled against the brief at handoff.
+`brief --session <id>` finds the assignment whose implementer is
+exactly that native session id; names are never matched.
+
+The [task-brief extension](pi/extensions/task-brief.ts) calls it
+for Pi. Bind a session by recording its native id as implementer
+and giving Pi the record:
+
+```sh
+ID=$(uuidgen | tr A-Z a-z)
+$R assign feat --title "Feature" --accountable orchestrator \
+  --implementer "$ID" --brief brief.md
+COORDINATION_RECORD=$COORDINATION_RECORD pi --session-id "$ID" --name feat
+```
+
+For a session already running, use its `nativeSessionId` from
+`ccmux show --json` with `assign` or `transfer --role implementer`;
+that Pi also needs the record path in its environment, so
+restoration begins once it is relaunched with it. Afterwards the
+session remembers the path in its own restorations, on any branch.
+
+Before each model request, including mid-run after a record or
+brief change or a compaction inside a run, the extension adds a
+visible restoration if the context Pi will send lacks one for the
+current state: after compaction or `/tree` removes it, or when the
+brief (content or path), implementer or accountable changes. A
+status update, `/reload` or an unchanged context does not repeat
+it. Session start and resume restore once more as explicit
+transitions, even when the context still holds the brief. A result counts only when the record
+and brief were unchanged across the read; if they keep changing,
+nothing is confirmed, a session already holding a brief is told
+once that it may be out of date, and the next boundary reads again.
+
+Assignment ownership is not inherited. A fork keeps its parent's conversation,
+earlier restorations included, but gets no new restoration and is
+told it is not the implementer; `/new` and unbound sessions get
+nothing. Codex has no such hooks: run `brief <id>` at start, after
+resuming or compaction, when told the assignment changed, and
+before handoff.
+
+Rollback: remove the extension from settings; the record is
+unchanged. Tests (real Pi in RPC mode with a scripted model and a
+CLI preload that changes the record between reads, temporary home,
+record and sessions, no tmux):
+`node --test scripts/tests/task-brief.test.mjs`.
 
 ## Terminal session sidebar and browser QA
 
