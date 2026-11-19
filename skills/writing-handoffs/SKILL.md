@@ -7,6 +7,8 @@ description: Write or update a concise handoff when returning delegated work, ha
 
 Give the recipient enough verified context to assess the result or continue the agreed work without reconstructing the conversation. A handoff transfers context; it does not change the user's requirements, grant access or certify completion.
 
+For ongoing implementation, QA, publication and human-review cycles, use [orchestrating-delivery](../orchestrating-delivery/SKILL.md). A handoff is one transition within that loop.
+
 ## Orchestrator location
 
 Run orchestrators in the repository’s main checkout, never in worktrees. Worktrees are for implementers. When delegating or handing off orchestration, start or resume the orchestrator in the main checkout and give it explicit paths to its implementers’ worktrees. Do not switch the main checkout’s branch or edit implementation sources as part of moving an orchestrator. Preserve the session transcript and verify the resumed process’s working directory. For Pi, `--session` retains the stored tool working directory even when launched elsewhere. To relocate an existing orchestrator, stop its old process and use `--fork <session-path>` from the main checkout; this preserves history in a new session with the correct tool directory. Verify both the process directory and session header before resuming work.
