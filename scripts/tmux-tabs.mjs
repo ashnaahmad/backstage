@@ -108,7 +108,7 @@ async function close(pane, client) {
 }
 
 async function confirmWindow(window, client) {
-  const name = await show('#{window_index}:#{window_name}', window);
+  const name = await show('#{E:@pi_window_label}:#{window_name}', window);   // as its tab names it (pi-tabs.conf)
   const pi = await show(`#{${PI_WINDOW}}`, window);
   const running = [...new Set((await tmux('list-panes', '-t', window, '-F', '#{pane_current_command}')).split('\n').filter(Boolean))];
   const ending = pi ? 'This ends the running Pi session.' : `This ends: ${running.join(', ')}.`;

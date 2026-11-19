@@ -859,7 +859,11 @@ of Pi's tmux session. With [the tab rows](tmux/pi-tabs.conf)
 installed, the bottom of the terminal has two labelled rows:
 
 - `Windows`: the session's windows as `index:name` (`*` on
-  screen, `-` previous). `π` marks a window running Pi.
+  screen, `-` previous). `π` marks a window running Pi,
+  labelled by Pi's pane number instead of the index
+  (`438:π name` for pane `%438`; `+` joins two Pis' numbers).
+  The label follows Pi's pane wherever it moves; clicks and
+  closing still act on the window itself.
   Waiting previews are not listed here. Click a name to show
   that window; click its `×` for a menu (Keep window first,
   also on Escape) that says what closing ends, including a

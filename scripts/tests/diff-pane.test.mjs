@@ -66,7 +66,11 @@ test.before(async () => {
   appendFileSync(join(repo, 'dirty.txt'), 'pre-existing user change\n');
   // Neovim swap files and state stay in the temporary directory; the pinned renderer is read from the real data home.
   process.env.XDG_STATE_HOME = join(dir, 'state');
+  // A pane made and closed first, so Pi's pane number (%1) differs from its window's index (0), as the
+  // Windows row tells them apart.
+  tmux('new-session', '-d', '-s', 'first');
   tmux('new-session', '-d', '-s', 'test', '-x', '240', '-y', '50', '-c', repo);
+  tmux('kill-session', '-t', 'first');
   owner = tmux('display-message', '-p', '-t', 'test', '#{pane_id}');
   process.env.TMUX = `${tmux('display-message', '-p', '#{socket_path}')},0,0`;
   process.env.TMUX_PANE = owner;
@@ -725,6 +729,14 @@ test('bottom tab rows: real mouse clicks select and close previews and windows; 
     assert.deepEqual(beside(), [doc], 'the editor is beside Pi; Hunk waits');
     await waitFor(() => /^Panels +✎ Write +Diff: repo ×.* notes\.md ×/.test(rows()[1]), 'the Panels row names both previews, after the writing view\'s switch');
     assert.match(rows()[0], /^Windows .*π /, 'the Windows row is labelled and marks Pi');
+    // Pi's window is labelled by Pi's pane number, not its index, also with another pane active there.
+    const number = owner.slice(1);
+    assert.notEqual(number, tmux('display-message', '-p', '-t', owner, '#{window_index}'), 'the test tells the two apart');
+    assert.match(rows()[0], new RegExp(`(^|\\s)${number}:π `), 'the Pi window is labelled by its pane number');
+    tmux('select-pane', '-t', doc);
+    await sleep(300);
+    assert.match(rows()[0], new RegExp(`(^|\\s)${number}:π `), 'whichever pane is active');
+    tmux('select-pane', '-t', owner);
     assert.ok(!rows()[0].includes('diff:repo'), 'the waiting preview is not also a window tab');
 
     const evidence = process.env.DIFF_PANE_EVIDENCE;
@@ -757,6 +769,8 @@ test('bottom tab rows: real mouse clicks select and close previews and windows; 
     // Windows: × asks before closing, naming a Pi session when it would end one.
     const spare = tmux('new-window', '-d', '-P', '-F', '#{window_id}', '-n', 'spare', 'sleep 300');
     await waitFor(() => rows()[0].includes('spare'), 'the new window has a tab');
+    const index = tmux('display-message', '-p', '-t', spare, '#{window_index}');
+    assert.match(rows()[0], new RegExp(`(^|\\s)${index}:spare`), 'a window without Pi keeps its index');
     click(0, '×', 'spare');
     await waitFor(() => /Close window \d+:spare\? This ends: sleep\./.test(screenOuter()), 'closing a window asks');
     clickText('Keep window');
@@ -768,6 +782,7 @@ test('bottom tab rows: real mouse clicks select and close previews and windows; 
     await waitFor(() => !tmux('list-windows', '-F', '#{window_id}').includes(spare), 'Close window closes it');
     click(0, '×', 'π');
     await waitFor(() => screenOuter().includes('This ends the running Pi session.'), 'the Pi window says what closing it ends');
+    assert.ok(screenOuter().includes(`Close window ${number}:`), 'and names it as its tab does');
     if (evidence) writeFileSync(join(evidence, 'pi-window-close.txt'), screenOuter());
     outer('send-keys', '-t', 'outer', 'Escape');
     await sleep(300);

@@ -18,10 +18,11 @@ const DIFF_EMPTY = '@pi_diff_empty_';     // + Hunk pane number, set on the Pi p
 export const DOC_OWNER = '@pi_doc_owner';
 const DOC_SERVER = '@pi_doc_server';
 export const PANELS = '@pi_panels';               // window option: this Pi's Panels tab row (tmux/pi-tabs.conf)
-export const PI_WINDOW = '@pi_window';            // window option: the Pi pane running here
+export const PI_WINDOW = '@pi_window';            // window option: 1 while a Pi runs here (the π mark)
 export const DOCS = '@pi_docs';                    // pane option on Pi: its Markdown documents, one path per line;
                                                    // copied to its editor, which keeps them if Pi's pane goes
-const PI_OWNER = '@pi_owner';                      // pane option: this pane runs a Pi with previews or documents
+const PI_OWNER = '@pi_owner';                      // pane option: 1 on each pane running a Pi (set on its first draw, at
+                                                   // session start); the Windows row labels the window by these panes
 const SESSION = '@pi_session';                     // pane option on Pi and its previews: the Pi session they belong to
 const PI_PID = '@pi_pid';                          // pane option on Pi: its process and the pane's, to tell a live Pi from a dead one;
 const LEFT = 'left';                               // then this mark once that Pi has released its previews on leaving
