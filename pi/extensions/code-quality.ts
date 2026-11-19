@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
@@ -62,13 +62,21 @@ export default function codeQuality(pi: ExtensionAPI) {
         alternatives: Type.String({ minLength: 1, description: "Remaining approaches and why not pursued; say if not investigated." }),
         nextStep: Type.String({ minLength: 1, description: "What would permit progress, who can resolve it, or why no change is needed." }),
       }, { description: "Required when ending an implementation request without an implementation; omit during ordinary investigation or review-only work." })),
+      reviewDisposition: Type.Optional(Type.Object({
+        reviewCallId: Type.String({ minLength: 1, description: "The review call id shown in the quality_review result." }),
+        status: StringEnum(["pending", "addressed", "no-change"] as const, { description: "pending: findings still being assessed or only partly resolved (explain in basis); addressed: findings acted on; no-change: findings assessed and no change made." }),
+        basis: Type.String({ minLength: 1, description: "Your assessment of the findings and the evidence for it." }),
+      }, { description: "Your disposition of a returned independent review. Review completion comes from the quality_review result; this records your assessment of it, not a certification." })),
     }),
     async execute(_id, params, _signal, _update, ctx) {
+      const disposition = params.reviewDisposition;
       summary = params.summary + (params.noImplementation
         ? "\nNo implementation:\n" + Object.entries(params.noImplementation).map(([key, value]) => `${key}: ${value}`).join("\n")
-        : "");
+        : "") + (disposition ? `\nReview ${disposition.reviewCallId}: ${disposition.status}. ${disposition.basis}` : "");
       render(ctx);
-      return { content: [{ type: "text", text: "Quality progress updated." }], details: { summary, ...(params.noImplementation ? { noImplementation: params.noImplementation } : {}) } };
+      return { content: [{ type: "text", text: "Quality progress updated." }], details: { summary,
+        ...(params.noImplementation ? { noImplementation: params.noImplementation } : {}),
+        ...(disposition ? { reviewDisposition: disposition } : {}) } };
     },
   });
 
@@ -88,7 +96,7 @@ export default function codeQuality(pi: ExtensionAPI) {
       sources: Type.Optional(Type.Array(Type.String(), { description: "Project requirements and design source paths; pointers, not an exploration whitelist." })),
       model: Type.Optional(Type.String({ description: "Override the default other-provider model: Opus 5.5 for OpenAI, Sol 6.1 for Claude." })),
     }),
-    async execute(_id, params, signal, _update, ctx) {
+    async execute(id, params, signal, _update, ctx) {
       const refs = resolve(root, "skills/code-quality/references");
       const instructions = `You are an independent code reviewer. Inspect the original requirements, project guidance and actual code.
 Assess correctness and design separately. Investigate whether consequential choices serve the requested outcome and preserve existing guarantees.
@@ -123,10 +131,11 @@ Report findings with inspected paths/lines or probes, distinguish fresh checks f
         });
         current.metrics = result.metrics;
         current.state = "returned";
-        if (!reviews.includes(current)) return { content: [{ type: "text", text: result.text }], details: { model, metrics: result.metrics } };
+        const cite = `Review call id: ${id} (cite it as reviewCallId in quality_status).`;
+        if (!reviews.includes(current)) return { content: [{ type: "text", text: result.text }, { type: "text", text: cite }], details: { model, metrics: result.metrics } };
         summary = `review returned from ${model}; evaluate findings`;
         render(ctx);
-        return { content: [{ type: "text", text: result.text }, { type: "text", text: `Review usage: ${duration(result.metrics.elapsedMs)}; ${usage([current], true)}. Reported tokens are not billed cost.` }], details: { model, metrics: result.metrics } };
+        return { content: [{ type: "text", text: result.text }, { type: "text", text: `${cite} Review usage: ${duration(result.metrics.elapsedMs)}; ${usage([current], true)}. Reported tokens are not billed cost.` }], details: { model, metrics: result.metrics } };
       } catch (error) {
         if (record) {
           record.state = signal?.aborted ? "cancelled" : "failed";

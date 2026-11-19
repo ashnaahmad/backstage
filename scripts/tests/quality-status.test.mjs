@@ -42,6 +42,30 @@ test('no-implementation evidence survives tool results and UI, and later progres
   assert.equal(widgets.get('quality'), undefined);
 });
 
+test('a review disposition is kept in details beside the summary; later progress without one drops it', async () => {
+  const modules = execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim();
+  const { loadExtensions } = await import(pathToFileURL(modules + '/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js'));
+  const { validateToolArguments } = await import(pathToFileURL(modules + '/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js'));
+  const loaded = await loadExtensions([process.cwd() + '/pi/extensions/code-quality.ts'], process.cwd());
+  const tool = loaded.extensions[0].tools.get('quality_status').definition;
+  const widgets = new Map();
+  const ctx = { ui: { setStatus() {}, setWidget: (key, value) => widgets.set(key, value) } };
+  const disposition = { reviewCallId: 'toolu_01Review', status: 'pending', basis: 'Finding 1 fixed; finding 2 still under investigation' };
+  const result = await tool.execute('one', { summary: 'Assessing review', reviewDisposition: disposition }, undefined, undefined, ctx);
+  assert.deepEqual(result.details.reviewDisposition, disposition);
+  assert.match(result.details.summary, /^Assessing review\nReview toolu_01Review: pending\. Finding 1 fixed/);
+  assert.ok(widgets.get('quality').join('\n').includes('Review toolu_01Review: pending.'));
+  const plain = await tool.execute('two', { summary: 'Next change' }, undefined, undefined, ctx);
+  assert.deepEqual(plain.details, { summary: 'Next change' }, 'callers without the field see the existing details');
+
+  const call = reviewDisposition => ({ type: 'toolCall', id: 'v', name: 'quality_status', arguments: { summary: 's', reviewDisposition } });
+  for (const status of ['pending', 'addressed', 'no-change']) {
+    assert.equal(validateToolArguments(tool, call({ ...disposition, status })).reviewDisposition.status, status);
+  }
+  assert.throws(() => validateToolArguments(tool, call({ ...disposition, status: 'approved' })));
+  assert.throws(() => validateToolArguments(tool, call({ reviewCallId: 'x', status: 'addressed' })), /basis/);
+});
+
 // Review display through the real transport and a deterministic fake `pi` on PATH: no model calls.
 test('reviews show in the widget and /quality with usage; failures stay visible; a new session resets them', async () => {
   const modules = execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim();
@@ -72,6 +96,8 @@ test('reviews show in the widget and /quality with usage; failures stay visible;
     assert.match(reviewLine(), /^Reviews: 1 · 0m [1-9]s · 3 out/, 'the running review shows its elapsed time and usage so far');
     const reply = await pending;
     assert.equal(reply.details.metrics.tokens.total, 33);
+    assert.match(reply.content.map(part => part.text).join('\n'), /Review call id: usage \(cite it as reviewCallId in quality_status\)/,
+      'the review result shows the id a reviewDisposition cites');
     assert.match(reviewLine(), /8 out/);
     await quality.handler('', ctx);
     assert.match(notice, /returned; .*14 input, 8 output, 10 cache-read, 1 cache-write/);

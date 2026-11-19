@@ -78,7 +78,7 @@ Fable 5.2 defaults to low thinking through `modelThinkingLevels` in [.pi/setting
 
 Install Chrome or another renderer-supported Chromium browser for image previews. PDF/LaTeX and Studio's optional Quarto/REPL dependencies are outside the current setup. Restart Pi or `/reload`; accept project trust only after reviewing the checkout.
 
-In `~/.pi/agent/settings.json`, preserve unrelated settings and add the absolute paths of this checkout's `pi/extensions/code-quality.ts`, `pi/extensions/quality-feedback.ts`, `pi/extensions/diff-pane.ts`, `pi/extensions/idle-exit.ts`, `pi/extensions/wait.ts` and `pi/extensions/task-brief.ts` to `extensions`, and the directory `skills` to `skills`. Copy the `defaultProvider`, `defaultModel`, `enabledModels` and `modelThinkingLevels` values from [.pi/settings.json](.pi/settings.json). Merge [.pi/claude-bridge.json](.pi/claude-bridge.json) into the global file of the same name. Recompute these paths after moving the checkout. `pi/extensions/` and `skills/` are deliberately not directories Pi discovers on its own: the harness loads once, from this main checkout, in every directory, including other worktrees of this branch (see [testing in a worktree](#testing-harness-changes-in-a-worktree)). Its local npm pins match the global ones.
+In `~/.pi/agent/settings.json`, preserve unrelated settings and add the absolute paths of this checkout's `pi/extensions/code-quality.ts`, `pi/extensions/quality-feedback.ts`, `pi/extensions/diff-pane.ts`, `pi/extensions/idle-exit.ts`, `pi/extensions/wait.ts`, `pi/extensions/task-brief.ts` and `pi/extensions/handoff.ts` to `extensions`, and the directory `skills` to `skills`. Copy the `defaultProvider`, `defaultModel`, `enabledModels` and `modelThinkingLevels` values from [.pi/settings.json](.pi/settings.json). Merge [.pi/claude-bridge.json](.pi/claude-bridge.json) into the global file of the same name. Recompute these paths after moving the checkout. `pi/extensions/` and `skills/` are deliberately not directories Pi discovers on its own: the harness loads once, from this main checkout, in every directory, including other worktrees of this branch (see [testing in a worktree](#testing-harness-changes-in-a-worktree)). Its local npm pins match the global ones.
 
 If migrating an existing agent setup, reconcile its quality hooks and skills with this bundle so the same guidance does not load twice. Back up settings before removing registrations.
 
@@ -250,6 +250,7 @@ pi -ne -ns -np \
   -e pi/extensions/idle-exit.ts \
   -e pi/extensions/wait.ts \
   -e pi/extensions/task-brief.ts \
+  -e pi/extensions/handoff.ts \
   --skill skills --prompt-template pi/prompts
 ```
 
@@ -458,6 +459,59 @@ session and a Chromium launch preflight before app startup.
 Application guidance's `hb` examples do not select a different
 runtime. Missing browsers are reported, not installed during
 QA. Existing Pi sessions need `/reload` after prompt changes.
+
+## Handoff submission
+
+The [handoff extension](pi/extensions/handoff.ts) gives Pi a
+`submit_handoff` tool. A delegated session calls it when its
+existing Markdown handoff is ready for the Codex owner to act on,
+passing the file's path, the QA state it reports (`pending`,
+`passed`, `failed`, `blocked` or `not-applicable`) and the
+owner's Codex thread id. Writing the file or ending a reply
+submits nothing.
+
+Routing is explicit: the owner thread id comes from the current
+brief, so put it there when delegating (inside Codex,
+`$CODEX_THREAD_ID` is the current thread). Nothing is inferred
+from the environment, and a session whose brief names no owner
+has nothing to submit to. A transferred assignment's new brief
+names the new owner.
+
+The tool runs `codex queue --thread <owner> --message <text>`
+once. The message names the handoff path, the QA state, and the
+sender's Pi session id, name, model, working directory and tmux
+pane, and asks the owner to read the handoff and its evidence,
+reconcile the landing plan and coordinate the next action. The
+owner reads the file itself; nothing from it is copied. The
+tool result (kept in the Pi transcript) records the submission
+and what the transport reported:
+
+- `queued`: the CLI printed its acknowledgement for that thread.
+  If it then ended abnormally, the exit code or signal is
+  recorded beside the acknowledgement. With the CLI bundled in
+  the desktop app (0.166.0-alpha.6), an idle desktop chat then
+  started a turn and a busy one took the message after its
+  current turn; that was observed, not guaranteed by the
+  acknowledgement. It is not evidence that the owner read or
+  accepted the handoff, or updated the plan.
+- `unconfirmed`: the CLI ran but printed no acknowledgement for
+  that thread: it exited non-zero, was killed (30 s timeout,
+  cancellation or excess output) or printed something
+  unfamiliar. Only complete acknowledgement lines count. The message may or may not be queued, so check
+  with the owner before submitting again.
+- `not-sent`: no CLI ran (none found, an invalid
+  `CODEX_CLI_PATH`, a CLI that could not be started, or
+  cancellation first).
+
+Unconfirmed and not-sent results are tool errors, and nothing is
+retried. The CLI is `CODEX_CLI_PATH` whenever that is set, even
+to an empty or invalid value, and must then be an absolute path
+to the executable. Otherwise it is the one bundled with the Codex
+desktop app in `/Applications` or `~/Applications`. A different
+Codex CLI on `PATH` is not used unless named, because its `queue`
+behaviour has not been tested.
+Tests: `node --test scripts/tests/handoff.test.mjs` (fake CLI;
+no Codex thread is contacted).
 
 ## Session snapshot
 

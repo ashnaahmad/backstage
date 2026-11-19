@@ -28,3 +28,7 @@ For completed work, lead with the result and any material limits. For unfinished
 Read back the handoff against the original request and the actual files or outputs. Could a fresh recipient find the work, understand which decisions hold, and take the next step without inventing missing context? Correct stale locations and unsupported completion claims. The receiving agent still inspects consequential code and evidence before accepting the result.
 
 This consolidates the harness's delegated-session handoff guidance and its code-quality reporting principles. For implementation-specific stopping criteria or review briefs, use [code-quality](../code-quality/SKILL.md) and its applicable references; for broader prose revision, use [writing](../writing/SKILL.md).
+
+## Submitting to a Codex owner
+
+When your brief names the owner's Codex thread id, submit the handoff with `submit_handoff` once it states what you want the owner to act on, including QA pending, failed or blocked. Give its path, the QA state it reports and the thread id exactly as the brief gives it; if the brief names none, report the handoff through your existing channel instead. Writing the file or ending your reply does not submit it. A queued result means Codex accepted the notification, not that the owner has read or accepted the handoff; report an unconfirmed or not-sent result rather than assuming delivery. A `passed` QA state is your report, not permission to publish or merge.
