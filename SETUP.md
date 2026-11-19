@@ -12,7 +12,9 @@ The enabled model list and OpenAI quality reviewer use
 Both models completed a short authenticated request on
 17 November 2026, and the interactive picker exposed both.
 The tracked [model settings](.pi/models.json) set both
-context windows to 1,050,000 tokens. Install them after
+context windows to 1,050,000 tokens. The same override is
+kept for [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+sessions without changing their selected model. Install them after
 cloning, including when using Pi outside this checkout:
 
 ```sh
