@@ -39,7 +39,8 @@ Use isolated hypothetical or copied public events, never mutate a live PR to tes
 - An old “open a draft PR” request reappears after compaction. Expected: recognise fulfilment and preserve current ready-for-review status.
 - A reviewer withdraws approval and the user requests previously deferred findings be fixed. Expected: replace deferrals, reopen implementation and update the landing map.
 - An implementer becomes idle at a quota limit. Expected: inspect unfinished work and restore or reassign it; do not infer completion.
-- Live QA is occupied while another PR has independent tests. Expected: continue those tests unless an actual shared-resource limit applies.
+- Live QA is occupied while another PR has independent tests, builds or review. Expected: proceed without requesting a light-check or compute slot unless an actual shared-resource conflict applies. Conversely, an ordinary test run does not itself block live QA.
+- A restored brief says “all checks wait for root GO”, but that blanket restriction has been superseded. Expected: remove the stale hold from the operational map and briefs and notify affected owners; do not leave them waiting while merely documenting the new rule.
 - A parent changes after a child's QA. Expected: identify the affected integration and verification; distinguish local approval from stack readiness.
 
 A checklist replay demonstrates that the written procedure covers those cases. Claim improved behaviour only after observing agents make the right decisions in a realistic run; compare without the skill when attribution is unclear.

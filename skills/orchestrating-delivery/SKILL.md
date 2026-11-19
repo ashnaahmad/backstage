@@ -46,7 +46,15 @@ For each PR, make the current owner, implementer, source head, parents, delivery
 
 Replace superseded state. Retain historical receipts separately with source identities; remove expired grants and obsolete “next” actions from the operational view. If the coordination record is adopted, use it for roles/dependencies/evidence and link or generate those fields rather than maintaining competing values. A formatted map is not evidence: check consequential reports against the cited source.
 
-Ordinary independent tests, typechecks, lint and source review may run in parallel. Serialize shared live-app QA or another demonstrated resource conflict, not all work merely because live QA has a queue. Name the concrete shared resource, holder and release condition when a limit is necessary; retire temporary limits when their reason ends. A waiting live-QA slot must not prevent independent repairs and checks.
+## Schedule live QA without serializing ordinary work
+
+The stack coordinator must not introduce a general “QA slot”, “light-check slot” or “compute GO” prerequisite for ordinary work. Implementers proceed with independent tests, typechecks, lint, builds, commit hooks and independent reviews in parallel under their existing assignment and permissions; they do not request a coordinator slot for each command. A live-app QA reservation does not by itself exclude those checks, and a local test run does not by itself prevent another PR from starting live QA.
+
+Schedule shared live-app QA where it needs exclusive resources. Any further restriction requires a demonstrated conflict: identify the actual shared service, mutable data, port or measured resource pressure, the affected operations, and the release condition. Limit only those conflicting operations and allow independent work to continue. A past memory incident, the word “QA”, or a precaution carried forward from an old brief is not sufficient evidence for a machine-wide lock. Prefer isolated resources or bounded concurrency where they address the conflict.
+
+When adopting this workflow, inspect outstanding grants and holds. Explicitly retire blanket ordinary-check restrictions in the current map and affected briefs, and tell their owners they may proceed; do not merely add a new permissive paragraph while leaving old “wait for GO” instructions active. Preserve genuine user-imposed limits and current resource conflicts, with their scope and basis. Reassess temporary restrictions when their reason ends.
+
+## Follow through and close
 
 Before closing a session, reconcile its assignment with all outstanding review findings, user decisions, interrupted work and dependency obligations. Preserve recoverable source and evidence and name who receives later feedback. “No new comments” does not settle old findings. Continue watching through the user's agreed outcome; report a real blocker or arrange an authorised continuation rather than silently leaving nobody accountable.
 
