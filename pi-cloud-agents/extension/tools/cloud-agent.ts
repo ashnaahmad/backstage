@@ -69,7 +69,7 @@ export function truncateToolOutput(
     }
   }
 
-  const notice = `\n\n[Output truncated to ${Math.round(maxBytes / 1024)} KB / ${maxLines} lines. View full session via /cloud status or /cloud attach]`;
+  const notice = `\n\n[Output truncated to ${Math.round(maxBytes / 1024)} KB / ${maxLines} lines. Inspect the run with /cloud status or the stored session in run storage]`;
   return {
     content: truncatedText + notice,
     truncated: true,
@@ -215,17 +215,30 @@ export async function executeCloudAgentTool(
         repoDir: ctx?.cwd || process.cwd(),
       });
 
+      const dispatchUnconfirmed = launchResult.promptDispatched === false;
       const text = [
-        "Cloud agent launched successfully.",
+        dispatchUnconfirmed
+          ? "Cloud agent VM started, but dispatch of the initial prompt was not confirmed."
+          : "Cloud agent launched successfully.",
         `Run ID: ${launchResult.runId}`,
         `Branch: ${launchResult.manifest.repo.workBranch}`,
         `Repository: ${launchResult.manifest.repo.url}`,
         `Model: ${launchResult.manifest.model.provider}/${launchResult.manifest.model.id}`,
         `State: ${launchResult.manifest.status}`,
+        ...(launchResult.warnings.length > 0
+          ? ["", "Warnings:", ...launchResult.warnings.map((w) => `- ${w}`)]
+          : []),
         "",
         "Next steps:",
-        `- Check progress: cloud_agent(action="status", runId="${launchResult.runId}")`,
-        `- Get result: cloud_agent(action="result", runId="${launchResult.runId}")`,
+        ...(dispatchUnconfirmed
+          ? [
+              `- Inspect first: cloud_agent(action="status", runId="${launchResult.runId}") and cloud_agent(action="result", runId="${launchResult.runId}"). A missing or pending result does not prove the prompt was lost.`,
+              "- If the run is working or has recovered work, continue with this run. If acceptance remains unclear, wait and re-check or ask the user rather than stopping or relaunching.",
+            ]
+          : [
+              `- Check progress: cloud_agent(action="status", runId="${launchResult.runId}")`,
+              `- Get result: cloud_agent(action="result", runId="${launchResult.runId}")`,
+            ]),
       ].join("\n");
 
       return {
@@ -237,6 +250,8 @@ export async function executeCloudAgentTool(
           repository: launchResult.manifest.repo.url,
           state: launchResult.manifest.status,
           microvmId: launchResult.microvmId,
+          promptDispatched: launchResult.promptDispatched,
+          warnings: launchResult.warnings,
         },
       };
     }
@@ -452,9 +467,9 @@ export async function executeCloudAgentTool(
         if (runState === "suspended") {
           nextStep = `Next: ask the user to run /cloud resume ${status.shortRunId}, then steer again.`;
         } else if (runState === "running" || runState === "idle") {
-          nextStep = `Next: check the run with cloud_agent(action="status", runId="${status.runId}") and retry; if the VM keeps refusing, ask the user to run /cloud continue ${status.shortRunId}.`;
+          nextStep = `Next: check the run with cloud_agent(action="status", runId="${status.runId}") and retry; if the VM keeps refusing, retrieve the durable result and launch a new run with a handoff.`;
         } else {
-          nextStep = `Next: the run has ended, so steering is not possible; launch a new run with cloud_agent(action="launch") or ask the user to run /cloud continue ${status.shortRunId}.`;
+          nextStep = `Next: the run has ended, so steering is not possible; retrieve the durable result and launch a new run with cloud_agent(action="launch") and a handoff.`;
         }
         const errorText = `Failed to dispatch steer prompt to cloud agent ${status.shortRunId}: ${why} (DISPATCH_FAILED). ${nextStep}`;
         return {
@@ -573,8 +588,10 @@ export function registerCloudAgentTool(pi: ExtensionAPI): void {
       const action = details.action as string | undefined;
 
       if (action === "launch" && details.runId) {
+        const unconfirmed =
+          details.promptDispatched === false ? ", prompt dispatch unconfirmed" : "";
         return new Text(
-          `${GLYPHS.running} Launched cloud run ${(details.runId as string).slice(0, 8)} (${details.branch})`,
+          `${GLYPHS.running} Launched cloud run ${(details.runId as string).slice(0, 8)} (${details.branch}${unconfirmed})`,
         );
       }
       if (action === "status" && details.runId) {

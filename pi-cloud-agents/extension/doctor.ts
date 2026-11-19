@@ -1,5 +1,5 @@
 /**
- * /cloud doctor diagnostic engine.
+ * `pi-cloud-agents doctor` diagnostic engine.
  * Probes configuration validity, AWS caller identity, region support,
  * CloudFormation stack states, image drift, pi version, synced providers, and concurrency.
  */
@@ -64,9 +64,8 @@ export async function runDoctorDiagnostics(
         id: "config",
         name: "Configuration File",
         status: "WARN",
-        detail: "Not configured (run /cloud setup to initialize)",
-        remediation:
-          "Run '/cloud setup' or 'npx pi-cloud-agents setup' to create initial configuration.",
+        detail: "Not configured (run pi-cloud-agents setup to initialize)",
+        remediation: "Run 'pi-cloud-agents setup' to create initial configuration.",
       });
     } else {
       checks.push({
@@ -140,7 +139,7 @@ export async function runDoctorDiagnostics(
       name: "Core Stack",
       status: isOk ? "PASS" : "WARN",
       detail: `${coreStackName} (${status})`,
-      remediation: isOk ? undefined : "Deploy or update stack using '/cloud setup'.",
+      remediation: isOk ? undefined : "Deploy or update stack using 'pi-cloud-agents setup'.",
     });
   } catch (err: unknown) {
     const msg = (err as Error)?.message || "";
@@ -150,7 +149,7 @@ export async function runDoctorDiagnostics(
       name: "Core Stack",
       status: isMissing ? "WARN" : "FAIL",
       detail: isMissing ? "Stack not yet deployed" : maskAccountId(msg),
-      remediation: "Run '/cloud setup' to create the CloudFormation infrastructure.",
+      remediation: "Run 'pi-cloud-agents setup' to create the CloudFormation infrastructure.",
     });
   }
 
@@ -177,7 +176,7 @@ export async function runDoctorDiagnostics(
         name: "Runner Image",
         status: "WARN",
         detail: `${imageName} (no active image version)`,
-        remediation: "Deploy runner image via '/cloud setup' or '/cloud update'.",
+        remediation: "Deploy runner image via 'pi-cloud-agents setup' or 'pi-cloud-agents update'.",
       });
     }
   } catch (err: unknown) {
@@ -192,7 +191,7 @@ export async function runDoctorDiagnostics(
       name: "Runner Image",
       status: isNotFound ? "WARN" : "FAIL",
       detail: isNotFound ? "Image not found" : maskAccountId(msg),
-      remediation: "Build image with '/cloud setup'.",
+      remediation: "Build image with 'pi-cloud-agents setup'.",
     });
   }
 
@@ -213,7 +212,7 @@ export async function runDoctorDiagnostics(
     detail: syncedProviders.length > 0 ? syncedProviders.join(", ") : "None configured",
     remediation:
       syncedProviders.length === 0
-        ? "Run '/cloud sync' to sync local provider API keys."
+        ? "Run 'pi-cloud-agents sync' to sync local provider API keys."
         : undefined,
   });
 

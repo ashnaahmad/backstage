@@ -1,17 +1,15 @@
 /**
  * MicroVM Run Client (T4.5).
  * Implements token minting and caching with T-5m auto-refresh,
- * HTTP REST wrapper with 403 refresh and 502 auto-resume backoff,
- * SSE event stream consumer with cursor-based reconnection,
- * WebSocket RPC client with subprotocol negotiation,
- * and periodic keepalive / RTT polling per ADR-4.
+ * and the HTTP REST wrapper with 403 refresh and 502 auto-resume backoff.
+ * Runner streaming endpoints (/v1/events, /v1/rpc) are part of the runner protocol;
+ * this client does not consume them.
  */
 
 import {
   CreateMicrovmAuthTokenCommand,
   type LambdaMicrovmsClient,
 } from "@aws-sdk/client-lambda-microvms";
-import { WebSocket as WsWebSocket } from "ws";
 import {
   type FinalizeRequest,
   type PromptRequest,
@@ -20,7 +18,6 @@ import {
   RunManifestSchema,
   type RunnerStatus,
   RunnerStatusSchema,
-  type SseEnvelope,
 } from "../../shared/protocol.js";
 import { AwsClientFactory } from "../aws/clients.js";
 
@@ -28,7 +25,6 @@ export const DEFAULT_PROXY_PORT = 8080;
 export const DEFAULT_TOKEN_EXPIRATION_MINUTES = 30;
 export const DEFAULT_REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 minutes (T-5 min)
 export const DEFAULT_RESUME_TIMEOUT_MS = 60000; // 60 seconds
-export const DEFAULT_KEEPALIVE_INTERVAL_MS = 60000; // 60 seconds
 
 export interface RunClientOptions {
   endpoint: string;
@@ -43,33 +39,6 @@ export interface RunClientOptions {
   refreshBufferMs?: number;
   resumeTimeoutMs?: number;
   fetchFn?: typeof fetch;
-  WebSocketClass?: typeof WebSocket | typeof WsWebSocket;
-}
-
-export interface SseSubscribeOptions {
-  cursor?: string;
-  onEvent?: (event: SseEnvelope) => void;
-  onError?: (error: Error) => void;
-  onClose?: () => void;
-  onSettled?: (status: string) => void;
-  signal?: AbortSignal;
-  autoReconnect?: boolean;
-  initialRetryDelayMs?: number;
-  maxRetryDelayMs?: number;
-}
-
-export interface SseSubscription {
-  unsubscribe: () => void;
-  getLastCursor: () => string | undefined;
-}
-
-export interface WebSocketRpcOptions {
-  clientId?: string;
-  onEvent?: (event: Record<string, unknown>) => void;
-  onUiRequest?: (request: Record<string, unknown>) => void;
-  onError?: (err: Error) => void;
-  onClose?: (code: number, reason: string) => void;
-  onOpen?: () => void;
 }
 
 export class RunClientError extends Error {
@@ -105,19 +74,6 @@ export class RunClientHttpError extends RunClientError {
   }
 }
 
-export interface WebSocketRpcClient {
-  ws: WebSocket | WsWebSocket;
-  send(data: Record<string, unknown>): void;
-  prompt(promptText: string): void;
-  steer(steerText: string): void;
-  followUp(followUpText: string): void;
-  abort(): void;
-  attach(clientId?: string): void;
-  detach(): void;
-  extensionUiResponse(id: string, response: unknown): void;
-  close(code?: number, reason?: string): void;
-}
-
 /**
  * Client for interacting with an AWS Lambda MicroVM runner instance.
  */
@@ -125,7 +81,6 @@ export class RunClient {
   private readonly options: RunClientOptions;
   private readonly clientFactory: AwsClientFactory;
   private readonly fetchFn: typeof fetch;
-  private readonly webSocketClass: typeof WebSocket | typeof WsWebSocket;
 
   private cachedToken: string | null = null;
   private cachedTokenExpiresAt = 0;
@@ -135,10 +90,6 @@ export class RunClient {
     this.options = { ...options };
     this.clientFactory = options.clientFactory ?? new AwsClientFactory();
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
-    this.webSocketClass =
-      options.WebSocketClass ??
-      (globalThis.WebSocket as unknown as typeof WsWebSocket) ??
-      WsWebSocket;
 
     if (options.token) {
       this.cachedToken = options.token;
@@ -160,16 +111,6 @@ export class RunClient {
       return `http://${endpoint}`.replace(/\/+$/, "");
     }
     return `https://${endpoint}`.replace(/\/+$/, "");
-  }
-
-  /**
-   * Resolves the WebSocket base URL for the runner RPC bridge.
-   */
-  public getWebSocketUrl(path = "/v1/rpc"): string {
-    const baseUrl = this.getBaseUrl();
-    const wsBase = baseUrl.replace(/^http:\/\//, "ws://").replace(/^https:\/\//, "wss://");
-    const cleanPath = path.startsWith("/") ? path : `/${path}`;
-    return `${wsBase}${cleanPath}`;
   }
 
   /**
@@ -422,313 +363,5 @@ export class RunClient {
     return this.requestJson<{ status: string }>("/v1/shutdown", {
       method: "POST",
     });
-  }
-
-  /**
-   * Fetches historical session entries since an entry ID from GET /v1/entries.
-   */
-  public async getHistoricalEntries(sinceId?: string): Promise<Record<string, unknown>[]> {
-    const q = sinceId ? `?since=${encodeURIComponent(sinceId)}` : "";
-    const res = await this.requestJson<{ entries: Record<string, unknown>[] }>(`/v1/entries${q}`);
-    return res.entries ?? [];
-  }
-
-  /**
-   * Subscribes to Server-Sent Events (SSE) from GET /v1/events with cursor tracking and auto-reconnect.
-   */
-  public subscribeEvents(options: SseSubscribeOptions = {}): SseSubscription {
-    let active = true;
-    let abortController = new AbortController();
-    let currentCursor = options.cursor;
-    const autoReconnect = options.autoReconnect ?? true;
-    let retryDelay = options.initialRetryDelayMs ?? 500;
-    const maxRetryDelay = options.maxRetryDelayMs ?? 10000;
-
-    const cleanup = () => {
-      active = false;
-      try {
-        abortController.abort();
-      } catch {}
-    };
-
-    if (options.signal) {
-      options.signal.addEventListener("abort", cleanup, { once: true });
-    }
-
-    const runLoop = async () => {
-      while (active) {
-        if (options.signal?.aborted) {
-          active = false;
-          break;
-        }
-
-        abortController = new AbortController();
-        const combinedSignal = abortController.signal;
-
-        try {
-          const path = currentCursor
-            ? `/v1/events?since=${encodeURIComponent(currentCursor)}`
-            : "/v1/events";
-          const headers: Record<string, string> = {
-            accept: "text/event-stream",
-            "cache-control": "no-cache",
-          };
-          if (currentCursor) {
-            headers[ProtocolHeaders.LAST_EVENT_ID] = currentCursor;
-          }
-
-          const res = await this.request(path, {
-            headers,
-            signal: combinedSignal,
-          });
-
-          if (!res.ok) {
-            const body = await res.text().catch(() => "");
-            throw new RunClientHttpError(res.status, res.statusText, body);
-          }
-
-          retryDelay = options.initialRetryDelayMs ?? 500; // Reset retry delay on successful connect
-
-          if (!res.body) {
-            throw new RunClientError("Response body is empty for SSE stream");
-          }
-
-          // Read stream using Web Streams reader
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder("utf-8");
-          let buffer = "";
-
-          let eventId: string | undefined;
-          let eventType = "message";
-          let eventDataLines: string[] = [];
-
-          const dispatchEvent = () => {
-            if (eventDataLines.length === 0 && !eventId) return;
-
-            const dataStr = eventDataLines.join("\n");
-            let parsedData: unknown = dataStr;
-            try {
-              parsedData = JSON.parse(dataStr);
-            } catch {
-              // keep as string
-            }
-
-            const envelope: SseEnvelope = {
-              id: eventId || `evt-${Date.now()}`,
-              type: eventType || "message",
-              data: parsedData,
-            };
-
-            if (eventId) {
-              currentCursor = eventId;
-            }
-
-            options.onEvent?.(envelope);
-
-            if (
-              envelope.type === "agent_settled" &&
-              typeof envelope.data === "object" &&
-              envelope.data !== null
-            ) {
-              const settledStatus = (envelope.data as { status?: string }).status || "idle";
-              options.onSettled?.(settledStatus);
-            }
-
-            // Reset parser fields
-            eventId = undefined;
-            eventType = "message";
-            eventDataLines = [];
-          };
-
-          while (active) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-
-            for (const line of lines) {
-              const trimmed = line.trimEnd();
-              if (trimmed === "") {
-                // Empty line denotes end of an SSE message block
-                dispatchEvent();
-                continue;
-              }
-
-              if (trimmed.startsWith(":")) {
-                // SSE comment / heartbeat
-                continue;
-              }
-
-              if (trimmed.startsWith("id:")) {
-                eventId = trimmed.slice(3).trim();
-              } else if (trimmed.startsWith("event:")) {
-                eventType = trimmed.slice(6).trim();
-              } else if (trimmed.startsWith("data:")) {
-                eventDataLines.push(trimmed.slice(5).trimStart());
-              }
-            }
-          }
-
-          // Handle leftover buffer if stream closed cleanly
-          dispatchEvent();
-        } catch (err: unknown) {
-          if (!active || options.signal?.aborted) {
-            break;
-          }
-
-          const error = err instanceof Error ? err : new Error(String(err));
-          options.onError?.(error);
-        }
-
-        if (!active || !autoReconnect || options.signal?.aborted) {
-          break;
-        }
-
-        // Backoff before reconnecting
-        await new Promise((resolve) => setTimeout(resolve, retryDelay));
-        retryDelay = Math.min(retryDelay * 1.5, maxRetryDelay);
-      }
-
-      options.onClose?.();
-    };
-
-    // Start background stream consumer
-    void runLoop();
-
-    return {
-      unsubscribe: cleanup,
-      getLastCursor: () => currentCursor,
-    };
-  }
-
-  /**
-   * Connects to the runner WebSocket RPC endpoint with standard subprotocols.
-   */
-  public async connectWebSocketRpc(options: WebSocketRpcOptions = {}): Promise<WebSocketRpcClient> {
-    const token = await this.getAuthToken();
-    const wsUrl = this.getWebSocketUrl("/v1/rpc");
-
-    const protocols: string[] = ["lambda-microvms"];
-    if (token) {
-      protocols.push(`lambda-microvms.authentication.${token}`);
-    }
-    protocols.push(`lambda-microvms.port.${DEFAULT_PROXY_PORT}`);
-
-    const WsCtor = this.webSocketClass;
-    const ws = new WsCtor(wsUrl, protocols);
-
-    const send = (data: Record<string, unknown>) => {
-      const payload = `${JSON.stringify(data)}\n`;
-      if ("send" in ws && typeof ws.send === "function") {
-        ws.send(payload);
-      }
-    };
-
-    const client: WebSocketRpcClient = {
-      ws,
-      send,
-      prompt: (text: string) => send({ type: "prompt", prompt: text }),
-      steer: (text: string) => send({ type: "steer", steer: text }),
-      followUp: (text: string) => send({ type: "follow_up", prompt: text }),
-      abort: () => send({ type: "abort" }),
-      attach: (clientId?: string) =>
-        send({ type: "attach", clientId: clientId ?? options.clientId }),
-      detach: () => send({ type: "detach" }),
-      extensionUiResponse: (id: string, response: unknown) =>
-        send({ type: "extension_ui_response", id, response }),
-      close: (code?: number, reason?: string) => {
-        if ("close" in ws && typeof ws.close === "function") {
-          ws.close(code, reason);
-        }
-      },
-    };
-
-    const handleMessage = (data: unknown) => {
-      try {
-        const rawStr =
-          typeof data === "string" ? data : (data as Buffer | Uint8Array).toString("utf-8");
-        const lines = rawStr.split("\n").filter((l) => l.trim().length > 0);
-        for (const line of lines) {
-          const parsed = JSON.parse(line) as Record<string, unknown>;
-          options.onEvent?.(parsed);
-
-          if (parsed.type === "extension_ui_request") {
-            options.onUiRequest?.(parsed);
-          }
-        }
-      } catch (err) {
-        options.onError?.(err instanceof Error ? err : new Error(String(err)));
-      }
-    };
-
-    if ("on" in ws && typeof (ws as unknown as { on: unknown }).on === "function") {
-      const nodeWs = ws as unknown as {
-        on(event: string, cb: (...args: unknown[]) => void): void;
-      };
-      nodeWs.on("open", () => options.onOpen?.());
-      nodeWs.on("message", (data: unknown) => handleMessage(data));
-      nodeWs.on("error", (err: unknown) =>
-        options.onError?.(err instanceof Error ? err : new Error(String(err))),
-      );
-      nodeWs.on("close", (code: unknown, reason: unknown) => {
-        const codeNum = typeof code === "number" ? code : 1000;
-        const reasonStr = reason ? reason.toString() : "";
-        options.onClose?.(codeNum, reasonStr);
-      });
-    } else {
-      const genericWs = ws as unknown as {
-        onopen: (() => void) | null;
-        onmessage: ((event: { data: unknown }) => void) | null;
-        onerror: ((error: unknown) => void) | null;
-        onclose: ((event: { code: number; reason: string }) => void) | null;
-      };
-      genericWs.onopen = () => options.onOpen?.();
-      genericWs.onmessage = (event: { data: unknown }) => handleMessage(event.data);
-      genericWs.onerror = () => options.onError?.(new Error("WebSocket encountered error"));
-      genericWs.onclose = (event: { code: number; reason: string }) =>
-        options.onClose?.(event.code, event.reason);
-    }
-
-    return client;
-  }
-
-  /**
-   * Starts periodic keepalive polling against GET /v1/status every intervalMs (default 60s).
-   * Measures RTT and generates inbound keepalive traffic per ADR-4.
-   * Returns a stop callback.
-   */
-  public startKeepalive(
-    intervalMs = DEFAULT_KEEPALIVE_INTERVAL_MS,
-    onPing?: (rttMs: number, status: RunnerStatus) => void,
-  ): () => void {
-    let stopped = false;
-    let timer: NodeJS.Timeout | null = null;
-
-    const ping = async () => {
-      if (stopped) return;
-      const t0 = Date.now();
-      try {
-        const status = await this.getStatus();
-        const rttMs = Date.now() - t0;
-        if (!stopped) {
-          onPing?.(rttMs, status);
-        }
-      } catch {
-        // Keepalive error ignored
-      } finally {
-        if (!stopped) {
-          timer = setTimeout(ping, intervalMs);
-        }
-      }
-    };
-
-    timer = setTimeout(ping, intervalMs);
-
-    return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-    };
   }
 }

@@ -12,7 +12,6 @@ import {
   formatSetupPlanTable,
   runSetupWizard,
 } from "../../core/setup/steps.js";
-import { handleCloudSetupCommand } from "../../extension/commands/setup.js";
 import { DEFAULT_LOCAL_CONFIG, type LocalConfig } from "../../shared/config.js";
 
 const stsMock = mockClient(STSClient);
@@ -234,29 +233,6 @@ describe("T4.3a Setup Wizard Step Machine & Prompter", () => {
       // openai-codex stripped because user declined OAuth opt-in
       expect(result.config.providers.synced).toEqual(["anthropic"]);
       expect(result.config.providers.oauthOptIn).toEqual([]);
-    });
-  });
-
-  describe("handleCloudSetupCommand", () => {
-    it("executes setup via extension router and outputs plan result", async () => {
-      const notified: string[] = [];
-      const res = await handleCloudSetupCommand(
-        ["--dry-run"],
-        {
-          hasUI: true,
-          ui: {
-            notify: (msg) => notified.push(msg),
-          },
-        },
-        {
-          nonInteractive: true,
-        },
-      );
-
-      expect(res.handled).toBe(true);
-      expect(res.output).toContain("pi cloud agents · Setup Plan");
-      expect(res.output).toContain("Plan preview generated (dry-run)");
-      expect(notified).toHaveLength(1);
     });
   });
 });

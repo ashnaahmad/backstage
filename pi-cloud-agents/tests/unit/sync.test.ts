@@ -8,7 +8,6 @@ import { mockClient } from "aws-sdk-client-mock";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadLocalConfig, saveLocalConfig } from "../../core/config.js";
 import { syncPiConfig } from "../../core/sync.js";
-import { handleCloudSyncCommand } from "../../extension/commands/sync.js";
 import { DEFAULT_LOCAL_CONFIG, type LocalConfig } from "../../shared/config.js";
 
 const cfnMock = mockClient(CloudFormationClient);
@@ -182,40 +181,6 @@ describe("T4.13 Cloud Sync (pi config bundle & credentials)", () => {
     expect(smCalls[0]?.args[0].input.Name).toBe(
       "pi-cloud-agents/pi-cloud-agents-core/pi-auth/anthropic",
     );
-  });
-
-  it("handles /cloud sync command via extension router and outputs summary table", async () => {
-    const config: LocalConfig = {
-      ...DEFAULT_LOCAL_CONFIG,
-      providers: {
-        synced: ["anthropic"],
-        oauthOptIn: [],
-        bedrockRole: false,
-      },
-    };
-    saveLocalConfig(config);
-
-    const notified: string[] = [];
-    const res = await handleCloudSyncCommand(
-      [],
-      {
-        hasUI: true,
-        ui: {
-          notify: (msg) => notified.push(msg),
-        },
-      },
-      {
-        authEntries: {
-          anthropic: { type: "api_key", key: "sk-test" },
-        },
-      },
-    );
-
-    expect(res.handled).toBe(true);
-    expect(res.output).toContain("pi cloud agents · Sync Complete");
-    expect(res.output).toContain("test-pi-cloud-bucket-12345");
-    expect(res.output).toContain("anthropic");
-    expect(notified).toHaveLength(1);
   });
 
   it("resolves stackName from localConfig when options.stackName is omitted", async () => {

@@ -88,7 +88,7 @@ export async function runVerification(options: VerifyOptions = {}): Promise<Veri
       detail: isMissing ? "Not configured" : (err as Error).message,
       durationMs: Date.now() - configStart,
       remediation: isMissing
-        ? "Run '/cloud setup' or 'npx pi-cloud-agents setup' to configure."
+        ? "Run 'pi-cloud-agents setup' to configure."
         : "Fix JSON syntax or schema errors in ~/.pi/agent/pi-cloud-agents.json.",
     };
     checks.push(cCheck);
@@ -199,7 +199,7 @@ export async function runVerification(options: VerifyOptions = {}): Promise<Veri
         status: "WARN",
         detail: `Core: ${coreStatus || "MISSING"} · Image: ${imgStatus}`,
         durationMs: Date.now() - cfnStart,
-        remediation: "Deploy or repair stacks using '/cloud setup'.",
+        remediation: "Deploy or repair stacks using 'pi-cloud-agents setup'.",
       };
       checks.push(cfnCheck);
       options.onProgress?.(cfnCheck);
@@ -211,7 +211,7 @@ export async function runVerification(options: VerifyOptions = {}): Promise<Veri
       status: "FAIL",
       detail: maskAccountId((err as Error).message || String(err)),
       durationMs: Date.now() - cfnStart,
-      remediation: "Run '/cloud setup' to create core and image infrastructure.",
+      remediation: "Run 'pi-cloud-agents setup' to create core and image infrastructure.",
     };
     checks.push(cfnCheck);
     options.onProgress?.(cfnCheck);
@@ -258,7 +258,7 @@ export async function runVerification(options: VerifyOptions = {}): Promise<Veri
         status: "WARN",
         detail: `${targetBucket} (encryption/policy unverified)`,
         durationMs: Date.now() - s3Start,
-        remediation: "Verify S3 bucket permissions in AWS console or run '/cloud setup'.",
+        remediation: "Verify S3 bucket permissions in AWS console or run 'pi-cloud-agents setup'.",
       };
       checks.push(s3Check);
       options.onProgress?.(s3Check);
@@ -309,7 +309,8 @@ export async function runVerification(options: VerifyOptions = {}): Promise<Veri
         status: "WARN",
         detail: `${imageName} (${desc.status || desc.state || "no active version"})`,
         durationMs: Date.now() - imgStart,
-        remediation: "Build and deploy runner image via '/cloud setup' or '/cloud update'.",
+        remediation:
+          "Build and deploy runner image via 'pi-cloud-agents setup' or 'pi-cloud-agents update'.",
       };
       checks.push(imgCheck);
       options.onProgress?.(imgCheck);
@@ -321,7 +322,7 @@ export async function runVerification(options: VerifyOptions = {}): Promise<Veri
       status: "WARN",
       detail: maskAccountId((err as Error).message || String(err)),
       durationMs: Date.now() - imgStart,
-      remediation: "Build runner image with '/cloud setup'.",
+      remediation: "Build runner image with 'pi-cloud-agents setup'.",
     };
     checks.push(imgCheck);
     options.onProgress?.(imgCheck);
@@ -343,7 +344,7 @@ export async function runVerification(options: VerifyOptions = {}): Promise<Veri
       status: "WARN",
       detail: "No providers configured",
       durationMs: Date.now() - secStart,
-      remediation: "Run '/cloud sync' to sync local provider API keys to AWS.",
+      remediation: "Run 'pi-cloud-agents sync' to sync local provider API keys to AWS.",
     };
     checks.push(secCheck);
     options.onProgress?.(secCheck);
@@ -375,7 +376,7 @@ export async function runVerification(options: VerifyOptions = {}): Promise<Veri
           status: "WARN",
           detail: `Missing credentials for: ${missing.join(", ")}`,
           durationMs: Date.now() - secStart,
-          remediation: "Run '/cloud sync' to upload missing provider credentials.",
+          remediation: "Run 'pi-cloud-agents sync' to upload missing provider credentials.",
         };
         checks.push(secCheck);
         options.onProgress?.(secCheck);
@@ -387,7 +388,7 @@ export async function runVerification(options: VerifyOptions = {}): Promise<Veri
         status: "WARN",
         detail: maskAccountId((err as Error).message || String(err)),
         durationMs: Date.now() - secStart,
-        remediation: "Run '/cloud sync' to synchronize credentials.",
+        remediation: "Run 'pi-cloud-agents sync' to synchronize credentials.",
       };
       checks.push(secCheck);
       options.onProgress?.(secCheck);
@@ -500,7 +501,7 @@ export async function runVerification(options: VerifyOptions = {}): Promise<Veri
   const verdict = hasFail ? "FAIL" : hasWarn ? "WARN" : "PASS";
 
   const passedCount = checks.filter((c) => c.status === "PASS").length;
-  let summary = `Verdict: All ${checks.length} verification checks passed in ${(totalDurationMs / 1000).toFixed(1)}s (est. cost: $${estimatedCostUsd.toFixed(2)}).\nInfrastructure is healthy and ready for cloud agents (/cloud new).`;
+  let summary = `Verdict: All ${checks.length} verification checks passed in ${(totalDurationMs / 1000).toFixed(1)}s (est. cost: $${estimatedCostUsd.toFixed(2)}).\nInfrastructure is healthy and ready for cloud agents (cloud_agent tool).`;
 
   if (verdict === "WARN") {
     summary = `Verdict: ${passedCount}/${checks.length} checks passed with warnings in ${(totalDurationMs / 1000).toFixed(1)}s (est. cost: $${estimatedCostUsd.toFixed(2)}).\nSome non-critical components require attention. See remediations above.`;

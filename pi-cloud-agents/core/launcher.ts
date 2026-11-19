@@ -187,7 +187,11 @@ export interface LaunchRunResult {
   workBranch: string;
   manifest: RunManifest;
   warnings: string[];
-  /** Whether the initial prompt reached the runner; otherwise the VM is idle without a task. */
+  /**
+   * True when the initial prompt request returned a success response. False means delivery is not
+   * confirmed: the runner never reported ready (no prompt sent), or the request failed or timed out
+   * (the runner may still have accepted it).
+   */
   promptDispatched?: boolean;
 }
 
@@ -223,8 +227,7 @@ async function resolveCoreStackResources(
       `Failed to describe stack '${stackName}': ${(err as Error).message}. Ensure setup completed successfully.`,
       {
         code: "STACK_NOT_FOUND",
-        remediation:
-          "Run '/cloud setup' or 'npx pi-cloud-agents setup' to create the required infrastructure.",
+        remediation: "Run 'pi-cloud-agents setup' to create the required infrastructure.",
       },
     );
   }
@@ -233,7 +236,7 @@ async function resolveCoreStackResources(
     `CloudFormation stack '${stackName}' has no BucketName output. Re-run setup.`,
     {
       code: "BUCKET_OUTPUT_MISSING",
-      remediation: "Re-deploy infrastructure with '/cloud setup'.",
+      remediation: "Re-deploy infrastructure with 'pi-cloud-agents setup'.",
     },
   );
 }
@@ -348,7 +351,7 @@ export async function prepareCloudRun(
       `Selected model provider '${model.provider}' is not synced to AWS Secrets Manager and Bedrock role is not enabled.`,
       {
         code: "PROVIDER_NOT_SYNCED",
-        remediation: `Run '/cloud sync' to synchronize ${model.provider} API keys or enable Bedrock via '/cloud config providers.bedrockRole true'.`,
+        remediation: `Run 'pi-cloud-agents sync' to synchronize ${model.provider} API keys or enable Bedrock via 'pi-cloud-agents config providers.bedrockRole true'.`,
       },
     );
   }
@@ -380,7 +383,8 @@ export async function prepareCloudRun(
       `MicroVM runner image '${imageName}' has no active deployed version in region ${region}.`,
       {
         code: "IMAGE_NOT_ACTIVE",
-        remediation: "Deploy the runner image using '/cloud setup' or '/cloud update'.",
+        remediation:
+          "Deploy the runner image using 'pi-cloud-agents setup' or 'pi-cloud-agents update'.",
       },
     );
   }
@@ -522,7 +526,7 @@ export async function startPreparedRun(
         `Active cloud agent runs limit reached (${activeVms.length}/${maxConcurrent} active VMs).`,
         {
           code: "CONCURRENCY_LIMIT_EXCEEDED",
-          remediation: `Wait for an active run to finish, terminate an idle run with '/cloud stop <id>', or increase concurrency limit via '/cloud config defaults.maxConcurrent <n>'.`,
+          remediation: `Wait for an active run to finish, terminate an idle run with '/cloud stop <id>', or increase concurrency limit via 'pi-cloud-agents config defaults.maxConcurrent <n>'.`,
         },
       );
     }
@@ -671,7 +675,7 @@ export async function startPreparedRun(
 
   if (!isReady) {
     warnings.push(
-      `Runner at '${endpoint}' did not report 'ready' within ${Math.round(readyTimeout / 1000)}s. Initial prompt submission deferred.`,
+      `Runner at '${endpoint}' did not report 'ready' within ${Math.round(readyTimeout / 1000)}s, so the initial prompt was not sent. Inspect run '${runId}' before deciding whether to stop it.`,
     );
   } else {
     // 9. Submit initial user prompt
@@ -685,7 +689,7 @@ export async function startPreparedRun(
       options.onProgress?.("prompt_dispatched", "Prompt dispatched successfully.");
     } catch (err: unknown) {
       warnings.push(
-        `Failed to dispatch initial prompt: ${(err as Error).message}. Attach with '/cloud attach ${runId}' to retry.`,
+        `Initial prompt dispatch was not confirmed: ${(err as Error).message}. The runner may have accepted it; inspect run '${runId}' status and durable result before deciding whether to stop or relaunch.`,
       );
     }
   }

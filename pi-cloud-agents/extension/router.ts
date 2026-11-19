@@ -2,32 +2,16 @@
  * Command router and completion engine for `/cloud <sub> [args]`.
  */
 
-import { handleCloudAttachCommand, handleCloudDetachCommand } from "./commands/attach.js";
-import { handleCloudConfigCommand } from "./commands/config.js";
-import { handleCloudContinueCommand } from "./commands/continue.js";
 import {
   handleCloudLogsCommand,
   handleCloudPrCommand,
   handleCloudResumeCommand,
-  handleCloudShellCommand,
   handleCloudStopCommand,
   handleCloudSuspendCommand,
 } from "./commands/controls.js";
-import { handleCloudDashboardCommand } from "./commands/dashboard.js";
-import { handleCloudDiagCommand } from "./commands/diag.js";
-import { handleCloudHubCommand } from "./commands/hub.js";
-import { handleCloudIamPolicyCommand } from "./commands/iam-helper.js";
-import { handleCloudDestroyCommand, handleCloudUpdateCommand } from "./commands/lifecycle-ops.js";
 import { handleCloudListCommand } from "./commands/list.js";
-import { handleCloudNewCommand } from "./commands/new.js";
-import { handleCloudOpenCommand } from "./commands/open.js";
-import { handleCloudSetupCommand } from "./commands/setup.js";
 import { handleCloudStatusCommand } from "./commands/status.js";
-import { handleCloudSyncCommand } from "./commands/sync.js";
-import { handleCloudVerifyCommand } from "./commands/verify.js";
-import { type DoctorProbeOptions, formatDoctorTable, runDoctorDiagnostics } from "./doctor.js";
 import type { PiUiContext } from "./prompter-pi.js";
-import { handleCloudAbortCommand } from "./ui/input-handler.js";
 
 export interface SubcommandDefinition {
   name: string;
@@ -37,48 +21,11 @@ export interface SubcommandDefinition {
 }
 
 export const CLOUD_SUBCOMMANDS: SubcommandDefinition[] = [
-  {
-    name: "setup",
-    description: "Set up cloud agents infrastructure and credentials",
-    usage: "/cloud setup [--verify]",
-  },
-  {
-    name: "verify",
-    description: "Verify cloud agents infrastructure and run smoke test",
-    usage: "/cloud verify [--with-model]",
-  },
-  {
-    name: "doctor",
-    description: "Inspect configuration and AWS environment health",
-    usage: "/cloud doctor",
-  },
-  {
-    name: "new",
-    description: "Start a new cloud agent run on the current repository",
-    usage: "/cloud new [prompt]",
-  },
   { name: "list", description: "List active and recent cloud agent runs", usage: "/cloud list" },
   {
     name: "status",
     description: "Show detail card and live telemetry for a run",
     usage: "/cloud status <runId>",
-    takesRunId: true,
-  },
-  {
-    name: "attach",
-    description: "Attach local mirror session to a cloud run",
-    usage: "/cloud attach <runId>",
-    takesRunId: true,
-  },
-  {
-    name: "detach",
-    description: "Detach current mirror session from cloud run",
-    usage: "/cloud detach",
-  },
-  {
-    name: "abort",
-    description: "Abort current active turn on cloud agent VM",
-    usage: "/cloud abort [runId]",
     takesRunId: true,
   },
   {
@@ -111,61 +58,7 @@ export const CLOUD_SUBCOMMANDS: SubcommandDefinition[] = [
     usage: "/cloud pr <runId> [title]",
     takesRunId: true,
   },
-  {
-    name: "shell",
-    description: "Open interactive shell inside cloud VM",
-    usage: "/cloud shell <runId>",
-    takesRunId: true,
-  },
-  {
-    name: "config",
-    description: "View and edit local cloud agent settings",
-    usage: "/cloud config [key] [val]",
-  },
-  {
-    name: "sync",
-    description: "Refresh synced credentials and pi config bundle",
-    usage: "/cloud sync",
-  },
-  {
-    name: "dashboard",
-    description: "Open live fleet observability dashboard",
-    usage: "/cloud dashboard",
-  },
-  {
-    name: "update",
-    description: "Update runner image and CloudFormation stacks",
-    usage: "/cloud update",
-  },
-  {
-    name: "destroy",
-    description: "Tear down all cloud agent infrastructure",
-    usage: "/cloud destroy",
-  },
-  {
-    name: "open",
-    description: "Open remote session transcript in read-only viewer mode",
-    usage: "/cloud open <runId>",
-    takesRunId: true,
-  },
-  {
-    name: "continue",
-    description: "Continue an existing run across the 8-hour MicroVM limit",
-    usage: "/cloud continue <runId>",
-    takesRunId: true,
-  },
-  {
-    name: "diag",
-    description: "Export sanitized diagnostics bundle for troubleshooting",
-    usage: "/cloud diag <runId>",
-    takesRunId: true,
-  },
-  {
-    name: "iam-policy",
-    description: "Display operator IAM policy JSON and CloudFormation template",
-    usage: "/cloud iam-policy [--yaml]",
-  },
-  { name: "help", description: "Show cloud agent command catalog", usage: "/cloud help [sub]" },
+  { name: "help", description: "Show cloud agent command catalog", usage: "/cloud help" },
 ];
 
 export interface AutocompleteItem {
@@ -238,7 +131,7 @@ export function formatHelpCatalog(): string {
   lines.push(`├${"─".repeat(width - 2)}┤`);
   lines.push(`│ ${"Usage: /cloud <command> [args]".padEnd(innerWidth)} │`);
   lines.push(
-    `│ ${"For details, run: /cloud help <command> or /cloud doctor".padEnd(innerWidth)} │`,
+    `│ ${"Launch and results: cloud_agent tool. Setup: pi-cloud-agents CLI".padEnd(innerWidth)} │`,
   );
   lines.push(`└${"─".repeat(width - 2)}┘`);
 
@@ -257,163 +150,44 @@ export interface RouteResult {
 /**
  * Routes `/cloud <sub> [args]` command execution.
  */
-export async function routeCloudCommand(
-  rawArgs: string,
-  ctx?: RouteContext,
-  doctorOptions?: DoctorProbeOptions,
-): Promise<RouteResult> {
+type SubcommandHandler = (subArgs: string[], ctx?: RouteContext) => Promise<RouteResult>;
+
+const HANDLERS = new Map<string, SubcommandHandler>([
+  ["list", handleCloudListCommand],
+  ["status", handleCloudStatusCommand],
+  ["stop", handleCloudStopCommand],
+  ["suspend", handleCloudSuspendCommand],
+  ["resume", handleCloudResumeCommand],
+  ["logs", handleCloudLogsCommand],
+  ["pr", handleCloudPrCommand],
+]);
+
+/**
+ * Routes `/cloud <sub> [args]` command execution. Assignments are launched and retrieved
+ * through the `cloud_agent` tool; setup, configuration and deployment use the standalone CLI.
+ */
+export async function routeCloudCommand(rawArgs: string, ctx?: RouteContext): Promise<RouteResult> {
   const trimmed = rawArgs.trim();
   const parts = trimmed.length > 0 ? trimmed.split(/\s+/) : [];
-  const sub = (parts[0] || "").toLowerCase();
+  const sub = (parts[0] || "help").toLowerCase();
   const subArgs = parts.slice(1);
-
-  if (!sub || sub === "hub") {
-    return handleCloudHubCommand(subArgs, ctx);
-  }
 
   if (sub === "help") {
     const helpText = formatHelpCatalog();
     if (ctx?.hasUI && ctx.ui?.notify) {
       ctx.ui.notify(helpText, "info");
     }
-    return {
-      subcommand: "help",
-      args: subArgs,
-      output: helpText,
-      handled: true,
-    };
+    return { subcommand: "help", args: subArgs, output: helpText, handled: true };
   }
 
-  if (sub === "doctor") {
-    const report = await runDoctorDiagnostics(doctorOptions);
-    const tableText = formatDoctorTable(report);
-    if (ctx?.hasUI && ctx.ui?.notify) {
-      const notifyType =
-        report.verdict === "HEALTHY" ? "info" : report.verdict === "DEGRADED" ? "warning" : "error";
-      ctx.ui.notify(tableText, notifyType);
-    }
-    return {
-      subcommand: "doctor",
-      args: subArgs,
-      output: tableText,
-      handled: true,
-    };
-  }
-
-  if (sub === "setup") {
-    return handleCloudSetupCommand(subArgs, ctx);
-  }
-
-  if (sub === "verify") {
-    return handleCloudVerifyCommand(subArgs, ctx);
-  }
-
-  if (sub === "new") {
-    return handleCloudNewCommand(subArgs, ctx);
-  }
-
-  if (sub === "config") {
-    return handleCloudConfigCommand(subArgs, ctx);
-  }
-
-  if (sub === "sync") {
-    return handleCloudSyncCommand(subArgs, ctx);
-  }
-
-  if (sub === "list") {
-    return handleCloudListCommand(subArgs, ctx);
-  }
-
-  if (sub === "status") {
-    return handleCloudStatusCommand(subArgs, ctx);
-  }
-
-  if (sub === "attach") {
-    return handleCloudAttachCommand(subArgs, ctx);
-  }
-
-  if (sub === "detach") {
-    return handleCloudDetachCommand(subArgs, ctx);
-  }
-
-  if (sub === "abort") {
-    return handleCloudAbortCommand(subArgs, ctx);
-  }
-
-  if (sub === "stop") {
-    return handleCloudStopCommand(subArgs, ctx);
-  }
-
-  if (sub === "suspend") {
-    return handleCloudSuspendCommand(subArgs, ctx);
-  }
-
-  if (sub === "resume") {
-    return handleCloudResumeCommand(subArgs, ctx);
-  }
-
-  if (sub === "logs") {
-    return handleCloudLogsCommand(subArgs, ctx);
-  }
-
-  if (sub === "pr") {
-    return handleCloudPrCommand(subArgs, ctx);
-  }
-
-  if (sub === "shell") {
-    return handleCloudShellCommand(subArgs, ctx);
-  }
-
-  if (sub === "update") {
-    return handleCloudUpdateCommand(subArgs, ctx);
-  }
-
-  if (sub === "destroy") {
-    return handleCloudDestroyCommand(subArgs, ctx);
-  }
-
-  if (sub === "open") {
-    return handleCloudOpenCommand(subArgs, ctx);
-  }
-
-  if (sub === "dashboard") {
-    return handleCloudDashboardCommand(subArgs, ctx);
-  }
-
-  if (sub === "continue") {
-    return handleCloudContinueCommand(subArgs, ctx);
-  }
-
-  if (sub === "diag") {
-    return handleCloudDiagCommand(subArgs, ctx);
-  }
-
-  if (sub === "iam-policy") {
-    return handleCloudIamPolicyCommand(subArgs, ctx);
-  }
-
-  const knownSub = CLOUD_SUBCOMMANDS.find((cmd) => cmd.name === sub);
-  if (knownSub) {
-    const notice = `Command '/cloud ${sub}' is stubbed in T4.1a and will be implemented in subsequent Phase 4 cards.\nUsage: ${knownSub.usage}\nRun '/cloud doctor' or '/cloud help'.`;
-    if (ctx?.hasUI && ctx.ui?.notify) {
-      ctx.ui.notify(notice, "info");
-    }
-    return {
-      subcommand: sub,
-      args: subArgs,
-      output: notice,
-      handled: true,
-    };
+  const handler = HANDLERS.get(sub);
+  if (handler) {
+    return handler(subArgs, ctx);
   }
 
   const unknownNotice = `Unknown cloud command: '/cloud ${sub}'. Run '/cloud help' to see available commands.`;
   if (ctx?.hasUI && ctx.ui?.notify) {
     ctx.ui.notify(unknownNotice, "error");
   }
-  return {
-    subcommand: sub,
-    args: subArgs,
-    output: unknownNotice,
-    handled: false,
-  };
+  return { subcommand: sub, args: subArgs, output: unknownNotice, handled: false };
 }

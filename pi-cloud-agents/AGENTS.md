@@ -2,7 +2,9 @@
 
 This experimental personal port runs bounded Pi coding assignments in AWS Lambda MicroVMs.
 The tested path is `cloud_agent` launch, durable answer/Git recovery, and explicit cleanup.
-The older `/cloud attach` adapter and cross-VM `/cloud continue` are not verified recovery paths.
+The extension registers `cloud_agent` and `/cloud` run controls (list, status, stop, suspend, resume,
+logs, pr); setup, configuration and deployment use the standalone CLI. Scheduled tasks (`scheduled/`)
+are the pi-tick AWS runner.
 
 ## Start with current sources
 

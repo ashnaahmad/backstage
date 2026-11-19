@@ -12,8 +12,9 @@ import {
 } from "@aws-sdk/client-lambda-microvms";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { mockClient } from "aws-sdk-client-mock";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AwsClientFactory } from "../../core/aws/clients.js";
+import { RunClient } from "../../core/client/run-client.js";
 import {
   generateRunId,
   inspectGitRepo,
@@ -21,7 +22,6 @@ import {
   prepareCloudRun,
   startPreparedRun,
 } from "../../core/launcher.js";
-import { handleCloudNewCommand } from "../../extension/commands/new.js";
 import type { LocalConfig } from "../../shared/config.js";
 import { RUN_ID_REGEX } from "../../shared/protocol.js";
 
@@ -355,6 +355,91 @@ describe("Cloud Agent Launcher (T4.4)", () => {
       expect(payload.options).toMatchObject({ maxDurationSec: 900, autoPush: false });
     });
 
+    describe("initial prompt dispatch", () => {
+      const readyStatus = {
+        status: "ready",
+        runId: "r",
+        uptimeSeconds: 1,
+        activeConnections: 0,
+        lastActivityAt: new Date().toISOString(),
+        pi: { running: true },
+      } as unknown as Awaited<ReturnType<RunClient["getStatus"]>>;
+
+      async function prepareStartable() {
+        cfnMock.on(DescribeStacksCommand).resolves({
+          Stacks: [
+            {
+              StackName: "pi-cloud-agents-test",
+              CreationTime: new Date(),
+              StackStatus: "CREATE_COMPLETE",
+              Outputs: [{ OutputKey: "BucketName", OutputValue: "test-storage-bucket" }],
+            },
+          ],
+        });
+        microvmsMock.on(GetMicrovmImageCommand).resolves({
+          imageArn:
+            "arn:aws:lambda:us-east-1:123456789012:microvm-image:pi-cloud-agents-runner-test",
+          state: "CREATED",
+          latestActiveImageVersion: "1",
+        });
+        microvmsMock.on(GetMicrovmImageVersionCommand).resolves({
+          imageVersion: "1",
+          state: "SUCCESSFUL",
+          status: "ACTIVE",
+        });
+        microvmsMock.on(ListMicrovmsCommand).resolves({ items: [] });
+        microvmsMock.on(RunMicrovmCommand).resolves({ microvmId: "microvm-7", endpoint: "e7" });
+        s3Mock.on(PutObjectCommand).resolves({});
+        return (await prepareCloudRun({ config: mockConfig, clientFactory })).prepared;
+      }
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it("reports a confirmed dispatch without warnings", async () => {
+        const prepared = await prepareStartable();
+        vi.spyOn(RunClient.prototype, "getStatus").mockResolvedValue(readyStatus);
+        const prompt = vi.spyOn(RunClient.prototype, "prompt").mockResolvedValue({});
+
+        const result = await startPreparedRun(prepared, { prompt: "p", clientFactory });
+        expect(result.promptDispatched).toBe(true);
+        expect(result.warnings).toEqual([]);
+        expect(prompt).toHaveBeenCalledWith({ prompt: "p", mode: "prompt" });
+      });
+
+      it("reports an unconfirmed dispatch without claiming the runner lacks the prompt", async () => {
+        const prepared = await prepareStartable();
+        vi.spyOn(RunClient.prototype, "getStatus").mockResolvedValue(readyStatus);
+        vi.spyOn(RunClient.prototype, "prompt").mockRejectedValue(new Error("socket hang up"));
+
+        const result = await startPreparedRun(prepared, { prompt: "p", clientFactory });
+        expect(result.promptDispatched).toBe(false);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toContain(
+          "Initial prompt dispatch was not confirmed: socket hang up",
+        );
+        expect(result.warnings[0]).toContain("may have accepted it");
+        expect(result.warnings[0]).not.toMatch(/steer|without the assignment|idle/i);
+      });
+
+      it("reports that no prompt was sent when the runner never becomes ready", async () => {
+        const prepared = await prepareStartable();
+        vi.spyOn(RunClient.prototype, "getStatus").mockRejectedValue(new Error("booting"));
+        const prompt = vi.spyOn(RunClient.prototype, "prompt");
+
+        const result = await startPreparedRun(prepared, {
+          prompt: "p",
+          clientFactory,
+          pollIntervalMs: 1,
+          readyTimeoutMs: 5,
+        });
+        expect(prompt).not.toHaveBeenCalled();
+        expect(result.promptDispatched).toBe(false);
+        expect(result.warnings[0]).toContain("so the initial prompt was not sent");
+      });
+    });
+
     it("reports the created MicroVM when a write after RunMicrovm fails", async () => {
       cfnMock.on(DescribeStacksCommand).resolves({
         Stacks: [
@@ -387,14 +472,6 @@ describe("Cloud Agent Launcher (T4.4)", () => {
       ).rejects.toMatchObject({
         microvmId: "microvm-9",
       });
-    });
-  });
-
-  describe("Extension /cloud new command", () => {
-    it("displays usage guidance when prompt argument is empty", async () => {
-      const result = await handleCloudNewCommand([]);
-      expect(result.handled).toBe(true);
-      expect(result.output).toContain("Usage: /cloud new");
     });
   });
 });

@@ -44,10 +44,6 @@ import {
 import { mockClient } from "aws-sdk-client-mock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeCloudDestroy, executeCloudUpdate } from "../../core/lifecycle-ops.js";
-import {
-  handleCloudDestroyCommand,
-  handleCloudUpdateCommand,
-} from "../../extension/commands/lifecycle-ops.js";
 import type { LocalConfig } from "../../shared/config.js";
 import { declaredTemplateParameters } from "../fakes/cfn-template.js";
 
@@ -58,7 +54,7 @@ const secretsMock = mockClient(SecretsManagerClient);
 
 const testRunnerSha = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
 
-// Outputs of a deployed infra/core.yaml stack, as /cloud setup leaves them.
+// Outputs of a deployed infra/core.yaml stack, as pi-cloud-agents setup leaves them.
 const coreStackOutputs = [
   { OutputKey: "BucketName", OutputValue: "test-bucket" },
   { OutputKey: "StorageBucketName", OutputValue: "test-bucket" },
@@ -355,7 +351,7 @@ describe("T4.10 Cloud Update & Destroy", () => {
           runnerZipPath: tmpRunnerZip,
           controllerZipPath: tmpRunnerZip,
         }),
-      ).rejects.toThrow(/BuildRoleArn\/ExecutionRoleArn.*\/cloud setup/);
+      ).rejects.toThrow(/BuildRoleArn\/ExecutionRoleArn.*pi-cloud-agents setup/);
 
       expect(s3Mock.commandCalls(PutObjectCommand)).toHaveLength(0);
       expect(cfnMock.commandCalls(CreateChangeSetCommand)).toHaveLength(0);
@@ -454,65 +450,6 @@ describe("T4.10 Cloud Update & Destroy", () => {
       expect(s3Mock.commandCalls(DeleteObjectsCommand)).toHaveLength(1);
       expect(secretsMock.commandCalls(DeleteSecretCommand)).toHaveLength(2);
       expect(cfnMock.commandCalls(DeleteStackCommand)).toHaveLength(2);
-    });
-  });
-
-  describe("Extension command handlers", () => {
-    it("handles /cloud update with notification output", async () => {
-      let currentSha = "06b2cdab21fba803cef0e88e63ccf9f927bb5f21061490176cbf7289b6d35291";
-      try {
-        const distManifest = JSON.parse(
-          fs.readFileSync(path.resolve(process.cwd(), "dist/image/manifest.json"), "utf-8"),
-        );
-        if (distManifest.sha256) {
-          currentSha = distManifest.sha256;
-        }
-      } catch {}
-
-      cfnMock.on(DescribeStacksCommand).resolves({
-        Stacks: [
-          {
-            StackName: "pi-cloud-agents-core",
-            StackStatus: "CREATE_COMPLETE",
-            Outputs: coreStackOutputs,
-            CreationTime: new Date(),
-          },
-        ],
-      });
-
-      microvmsMock.on(GetMicrovmImageCommand).resolves({
-        imageArn: "arn:aws:lambda:us-east-1:123456789012:microvm-image:runner",
-        latestActiveImageVersion: "12",
-      });
-
-      microvmsMock.on(GetMicrovmImageVersionCommand).resolves({
-        imageVersion: "12",
-        codeArtifact: { uri: `s3://test-bucket/runner/${currentSha}.zip` },
-        environmentVariables: { PI_CLOUD_RUNNER_SHA: currentSha },
-        description: JSON.stringify({
-          manifestSha256: currentSha,
-          piVersion: "0.85.1",
-        }),
-      });
-
-      s3Mock.on(PutObjectCommand).resolves({});
-
-      const res = await handleCloudUpdateCommand([], { hasUI: false });
-      expect(res.handled).toBe(true);
-      expect(res.output).toContain("✓");
-    });
-
-    it("handles /cloud destroy with confirmation skip", async () => {
-      microvmsMock.on(ListMicrovmsCommand).resolves({ items: [] });
-      s3Mock.on(ListObjectVersionsCommand).resolves({ Versions: [] });
-      secretsMock.on(ListSecretsCommand).resolves({ SecretList: [] });
-      cfnMock.on(DeleteStackCommand).resolves({});
-      cfnMock.on(DescribeStacksCommand).resolves({ Stacks: [] });
-
-      const res = await handleCloudDestroyCommand(["--yes", "--force"], { hasUI: false });
-      expect(res.handled).toBe(true);
-      expect(res.output).toContain("Destroyed resources summary");
-      expect(res.output).toContain("Zero billable resources remain");
     });
   });
 });

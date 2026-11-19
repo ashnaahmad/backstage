@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Removed
+- Local mirror/attach, input interception, automatic reattach, footer badge and entry renderers.
+- `/cloud` hub, dashboard, open, continue, abort, shell and new; in-Pi setup, verify, doctor,
+  config, sync, update, destroy, diag and iam-policy (the standalone CLI keeps these).
+- Unwired budget-guard and GitHub App modules; development spikes (`scripts/spike/`, guest
+  capabilities, hello bundle, local pi-headless harness); run-client SSE/WebSocket/keepalive
+  consumers used only by the mirror. Runner endpoints are unchanged.
+
+### Kept
+- `cloud_agent` (launch, status, result, steer, stop) and `/cloud` run controls (list, status,
+  stop, suspend, resume, logs, pr, help).
+
 ## [0.1.0] - 2026-09-06
 
 ### Added

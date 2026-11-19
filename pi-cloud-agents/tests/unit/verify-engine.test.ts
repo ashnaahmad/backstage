@@ -19,7 +19,6 @@ import { mockClient } from "aws-sdk-client-mock";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AwsClientFactory } from "../../core/aws/clients.js";
 import { formatVerifyReport, runVerification } from "../../core/verify/engine.js";
-import { handleCloudVerifyCommand } from "../../extension/commands/verify.js";
 import type { LocalConfig } from "../../shared/config.js";
 
 const stsMock = mockClient(STSClient);
@@ -206,31 +205,5 @@ describe("Verification Engine (T4.3d)", () => {
     const formatted = formatVerifyReport(report);
     expect(formatted).toContain("Remediations:");
     expect(formatted).toContain("Verdict: Verification failed");
-  });
-
-  it("executes /cloud verify extension command handler", async () => {
-    stsMock.on(GetCallerIdentityCommand).resolves({
-      Account: "123456789012",
-      Arn: "arn:aws:iam::123456789012:user/ant",
-    });
-
-    const notified: Array<{ message: string; type?: string }> = [];
-    const ctx = {
-      hasUI: true,
-      ui: {
-        notify: (message: string, type?: string) => {
-          notified.push({ message, type });
-        },
-      },
-    };
-
-    const result = await handleCloudVerifyCommand(
-      ["--no-model"],
-      ctx as unknown as import("../../extension/router.js").RouteContext,
-    );
-    expect(result.handled).toBe(true);
-    expect(result.subcommand).toBe("verify");
-    expect(result.output).toContain("Verification Report");
-    expect(notified.length).toBeGreaterThan(0);
   });
 });

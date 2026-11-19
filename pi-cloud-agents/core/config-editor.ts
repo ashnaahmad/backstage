@@ -128,7 +128,8 @@ export const CONFIG_FIELDS: ConfigFieldMeta[] = [
     key: "defaults.enableShell",
     section: "Defaults",
     type: "boolean",
-    description: "Enable remote shell ingress on port 8022",
+    description:
+      "Shell ingress on port 8022 (not persisted by the config schema; no shell daemon ships)",
   },
   {
     key: "providers.synced",
@@ -290,7 +291,7 @@ export function setConfigValue(
 
   if (!meta) {
     throw new Error(
-      `Unknown configuration key '${cleanKey}'. Run '/cloud config' to list valid keys.`,
+      `Unknown configuration key '${cleanKey}'. Run 'pi-cloud-agents config' to list valid keys.`,
     );
   }
 
@@ -325,22 +326,22 @@ export function setConfigValue(
 
   if (cleanKey === "aws.region" && previousValue !== coercedValue) {
     warnings.push(
-      `Region changed to '${coercedValue}'. Run '/cloud setup' to create infrastructure in ${coercedValue}.`,
+      `Region changed to '${coercedValue}'. Run 'pi-cloud-agents setup' to create infrastructure in ${coercedValue}.`,
     );
   } else if (cleanKey === "aws.profile" && previousValue !== coercedValue) {
     warnings.push(
-      `AWS profile changed to '${coercedValue || "(default)"}'. Run '/cloud setup' or '/cloud doctor' to verify account access.`,
+      `AWS profile changed to '${coercedValue || "(default)"}'. Run 'pi-cloud-agents setup' or 'pi-cloud-agents doctor' to verify account access.`,
     );
   } else if (cleanKey === "image.memoryMiB" && previousValue !== coercedValue) {
     warnings.push(
-      `Memory allocation changed to ${coercedValue} MiB. Run '/cloud update' to rebuild the runner image with this memory size.`,
+      `Memory allocation changed to ${coercedValue} MiB. Run 'pi-cloud-agents update' to rebuild the runner image with this memory size.`,
     );
   } else if (
     (cleanKey === "providers.synced" || cleanKey === "providers.oauthOptIn") &&
     JSON.stringify(previousValue) !== JSON.stringify(coercedValue)
   ) {
     warnings.push(
-      "Provider sync list changed. Run '/cloud sync' to update credentials in AWS Secrets Manager.",
+      "Provider sync list changed. Run 'pi-cloud-agents sync' to update credentials in AWS Secrets Manager.",
     );
   }
 
@@ -408,8 +409,10 @@ export function formatConfigView(config: LocalConfig, maxWidth = 80): string {
   }
 
   lines.push(`├${"─".repeat(width - 2)}┤`);
-  lines.push(`${"│ Usage: /cloud config <key> [value]".padEnd(width - 1)}│`);
-  lines.push(`${"│ Example: /cloud config defaults.maxDurationHours 6".padEnd(width - 1)}│`);
+  lines.push(`${"│ Usage: pi-cloud-agents config <key> [value]".padEnd(width - 1)}│`);
+  lines.push(
+    `${"│ Example: pi-cloud-agents config defaults.maxDurationHours 6".padEnd(width - 1)}│`,
+  );
   lines.push(`└${"─".repeat(width - 2)}┘`);
 
   return lines.join("\n");

@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCli } from "../../cli/main.js";
 import { formatConfigView, getConfigValue, setConfigValue } from "../../core/config-editor.js";
 import { loadLocalConfig, saveLocalConfig } from "../../core/config.js";
-import { handleCloudConfigCommand } from "../../extension/commands/config.js";
 import { DEFAULT_LOCAL_CONFIG, type LocalConfig } from "../../shared/config.js";
 
-describe("T4.11 Config Editor & /cloud config", () => {
+describe("T4.11 Config Editor & pi-cloud-agents config", () => {
   let tempDir: string;
   let prevAgentDir: string | undefined;
 
@@ -51,8 +51,13 @@ describe("T4.11 Config Editor & /cloud config", () => {
     });
   });
 
-  it("persists the no-push policy through the supported /cloud config command", async () => {
-    await handleCloudConfigCommand(["defaults.autoPush", "false"]);
+  it("persists the no-push policy through the supported CLI config command", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await runCli(["node", "main.js", "config", "defaults.autoPush", "false"])).toBe(0);
+    } finally {
+      log.mockRestore();
+    }
     expect(loadLocalConfig({ customDir: tempDir }).defaults.autoPush).toBe(false);
   });
 
@@ -124,11 +129,13 @@ describe("T4.11 Config Editor & /cloud config", () => {
 
       const memRes = setConfigValue(config, "image.memoryMiB", "8192");
       expect(memRes.warnings).toHaveLength(1);
-      expect(memRes.warnings[0]).toContain("Run '/cloud update' to rebuild the runner image");
+      expect(memRes.warnings[0]).toContain(
+        "Run 'pi-cloud-agents update' to rebuild the runner image",
+      );
 
       const provRes = setConfigValue(config, "providers.synced", "anthropic");
       expect(provRes.warnings).toHaveLength(1);
-      expect(provRes.warnings[0]).toContain("Run '/cloud sync'");
+      expect(provRes.warnings[0]).toContain("Run 'pi-cloud-agents sync'");
 
       const profRes = setConfigValue(config, "aws.profile", "dev-account");
       expect(profRes.warnings).toHaveLength(1);
@@ -154,54 +161,53 @@ describe("T4.11 Config Editor & /cloud config", () => {
     });
   });
 
-  describe("handleCloudConfigCommand", () => {
-    it("handles /cloud config (no args) by returning full table view", async () => {
+  describe("CLI config command", () => {
+    async function cli(args: string[]): Promise<{ code: number; out: string; err: string }> {
+      const out: string[] = [];
+      const err: string[] = [];
+      const log = vi.spyOn(console, "log").mockImplementation((msg) => out.push(String(msg)));
+      const error = vi.spyOn(console, "error").mockImplementation((msg) => err.push(String(msg)));
+      try {
+        const code = await runCli(["node", "main.js", "config", ...args]);
+        return { code, out: out.join("\n"), err: err.join("\n") };
+      } finally {
+        log.mockRestore();
+        error.mockRestore();
+      }
+    }
+
+    it("returns the full table view without arguments", async () => {
       saveLocalConfig(DEFAULT_LOCAL_CONFIG);
-
-      const notified: string[] = [];
-      const res = await handleCloudConfigCommand([], {
-        hasUI: true,
-        ui: {
-          notify: (msg) => notified.push(msg),
-        },
-      });
-
-      expect(res.handled).toBe(true);
-      expect(res.output).toContain("pi cloud agents · Configuration");
-      expect(notified).toHaveLength(1);
+      const res = await cli([]);
+      expect(res.code).toBe(0);
+      expect(res.out).toContain("pi cloud agents · Configuration");
     });
 
-    it("handles /cloud config <key> by returning specific field value and description", async () => {
+    it("reads a specific field value", async () => {
       saveLocalConfig(DEFAULT_LOCAL_CONFIG);
-
-      const res = await handleCloudConfigCommand(["defaults.maxDurationHours"]);
-      expect(res.handled).toBe(true);
-      expect(res.output).toContain("Config 'defaults.maxDurationHours': 4");
-      expect(res.output).toContain("Description:");
+      const res = await cli(["defaults.maxDurationHours"]);
+      expect(res.code).toBe(0);
+      expect(res.out).toContain("defaults.maxDurationHours = 4");
     });
 
-    it("handles /cloud config <key> <val> by updating, saving, and reporting warnings", async () => {
+    it("updates and saves a field", async () => {
       saveLocalConfig(DEFAULT_LOCAL_CONFIG);
-
-      const res = await handleCloudConfigCommand(["defaults.maxDurationHours", "7"]);
-      expect(res.handled).toBe(true);
-      expect(res.output).toContain("Updated 'defaults.maxDurationHours' to: 7 (was: 4)");
-
-      // Check saved on disk
-      const loaded = loadLocalConfig();
-      expect(loaded.defaults.maxDurationHours).toBe(7);
+      const res = await cli(["defaults.maxDurationHours", "7"]);
+      expect(res.code).toBe(0);
+      expect(res.out).toContain("Updated 'defaults.maxDurationHours' from 4 to 7.");
+      expect(loadLocalConfig().defaults.maxDurationHours).toBe(7);
     });
 
-    it("handles invalid key or value gracefully with descriptive error", async () => {
+    it("rejects unknown keys and out-of-range values without saving", async () => {
       saveLocalConfig(DEFAULT_LOCAL_CONFIG);
+      const unknown = await cli(["unknown.key", "1"]);
+      expect(unknown.code).toBe(1);
+      expect(unknown.err).toContain("Unknown configuration key 'unknown.key'");
 
-      const res = await handleCloudConfigCommand(["unknown.key"]);
-      expect(res.handled).toBe(true);
-      expect(res.output).toContain("Unknown config key 'unknown.key'");
-
-      const res2 = await handleCloudConfigCommand(["defaults.maxDurationHours", "99"]);
-      expect(res2.handled).toBe(true);
-      expect(res2.output).toContain("exceeds maximum allowed");
+      const tooLong = await cli(["defaults.maxDurationHours", "99"]);
+      expect(tooLong.code).toBe(1);
+      expect(tooLong.err).toContain("exceeds maximum allowed");
+      expect(loadLocalConfig().defaults.maxDurationHours).toBe(4);
     });
   });
 });

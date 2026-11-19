@@ -165,6 +165,7 @@ describe("T4.9 Cloud Agent Tool for Local LLM", () => {
         endpoint: "mvm-launch123.microvm.us-east-1.amazonaws.com",
         workBranch: "pi-cloud/launch123",
         warnings: [],
+        promptDispatched: true,
         manifest: {
           ...activeManifest,
           runId: "run-20260906-launch123",
@@ -190,6 +191,42 @@ describe("T4.9 Cloud Agent Tool for Local LLM", () => {
       expect(result.content[0]?.text).toContain("run-20260906-launch123");
       expect(result.content[0]?.text).toContain("Next steps:");
       expect(launchSpy).toHaveBeenCalledWith(expect.objectContaining({ autoPush: false }));
+      launchSpy.mockRestore();
+    });
+
+    it("reports an unconfirmed initial prompt dispatch instead of a successful launch", async () => {
+      const warning =
+        "Initial prompt dispatch was not confirmed: HTTP 502. The runner may or may not have accepted it; check run 'run-20260906-nodisp1' status and durable result before stopping it and relaunching with the same options.";
+      const launchSpy = vi.spyOn(launcherModule, "launchCloudRun").mockResolvedValueOnce({
+        runId: "run-20260906-nodisp1",
+        microvmId: "mvm-nodisp1",
+        endpoint: "mvm-nodisp1.microvm.us-east-1.amazonaws.com",
+        workBranch: "pi-cloud/nodisp1",
+        warnings: [warning],
+        promptDispatched: false,
+        manifest: { ...activeManifest, runId: "run-20260906-nodisp1" },
+      });
+
+      const result = await executeCloudAgentTool("call-nodisp", {
+        action: "launch",
+        prompt: "Refactor auth middleware",
+        autoPush: false,
+      });
+
+      const text = result.content[0]?.text ?? "";
+      expect(text).not.toContain("launched successfully");
+      expect(text).toContain("dispatch of the initial prompt was not confirmed");
+      expect(text).toContain(warning);
+      const statusAt = text.indexOf('action="status", runId="run-20260906-nodisp1"');
+      const resultAt = text.indexOf('action="result", runId="run-20260906-nodisp1"');
+      expect(statusAt).toBeGreaterThan(-1);
+      expect(resultAt).toBeGreaterThan(-1);
+      expect(text).not.toContain('action="stop"');
+      expect(text).toContain("does not prove the prompt was lost");
+      expect(text).toContain(
+        "wait and re-check or ask the user rather than stopping or relaunching",
+      );
+      expect(result.details.promptDispatched).toBe(false);
       launchSpy.mockRestore();
     });
 

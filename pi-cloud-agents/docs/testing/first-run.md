@@ -10,7 +10,9 @@ Target: A user with an AWS account and pi gets a working cloud agent in **<= 15 
 ## 2. CLI First-Run Test
 1. Run setup:
    ```bash
-   npx pi-cloud-agents setup --verify
+   npm ci && npm run build
+   node dist/cli/main.js setup
+   node dist/cli/main.js verify
    ```
 2. Observe Quick Setup summary screen:
    - Detected profile and target region (`us-east-1`)
@@ -23,24 +25,13 @@ Target: A user with an AWS account and pi gets a working cloud agent in **<= 15 
    - Verification checks run (~1-2 min)
 4. Overall setup time must be **<= 15 minutes**.
 
-## 3. TUI First-Run Test
-1. Start pi in any git repo:
+## 3. Pi First-Run Test
+1. Start pi in a Git repository with this checkout's extension:
    ```bash
-   pi
+   pi -e /absolute/path/to/pi-cloud-agents/extension/index.ts
    ```
-2. Run `/cloud`:
-   - Pre-setup: Displays welcoming first-run overview.
-   - Post-setup: Displays hub with fleet status and quick actions.
-3. Launch a new cloud agent:
-   ```bash
-   /cloud new "Add unit test for helper function"
-   ```
-4. Attach to live mirror session:
-   ```bash
-   /cloud attach
-   ```
-5. Observe live streamed events, remote tool executions, and footer telemetry.
-6. Detach cleanly:
-   ```bash
-   /cloud detach
-   ```
+2. Ask the agent to launch a bounded assignment with the `cloud_agent` tool (`action: "launch"`,
+   `autoPush: false` unless publication is authorized), then retrieve it with `action: "result"`.
+3. Run `/cloud list` and `/cloud status <runId>` to inspect the run; `/cloud help` lists the
+   remaining run controls (stop, suspend, resume, logs, pr).
+4. Stop the run with `cloud_agent` `action: "stop"` or `/cloud stop <runId>` and verify termination.

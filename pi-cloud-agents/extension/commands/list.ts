@@ -1,21 +1,20 @@
 /**
  * Extension command handler for `/cloud list`.
  * Formats width-safe run table per 07-ux-and-observability.md §2.2
- * and provides interactive action menu (attach · status · dashboard · logs · pr · stop).
+ * and provides an interactive action menu (status · logs · pr · stop).
  */
 
 import { type RunListItem, listCloudRuns } from "../../core/list.js";
 import { PiPrompter } from "../prompter-pi.js";
 import type { RouteContext, RouteResult } from "../router.js";
 import { type TableColumn, table } from "../ui/kit.js";
-import { getActiveMirrorSession } from "../ui/mirror.js";
 
 /**
  * Formats run items into a responsive, aligned Unicode table.
  */
 export function formatRunsTable(runs: RunListItem[], options: { maxWidth?: number } = {}): string {
   if (runs.length === 0) {
-    return "No cloud agent runs found. Start a run with '/cloud new <prompt>'.";
+    return "No cloud agent runs found. Start a run with the cloud_agent tool (action: launch).";
   }
 
   const maxWidth = options.maxWidth ?? 80;
@@ -82,28 +81,15 @@ export async function handleCloudListCommand(
     if (ctx?.hasUI && runs.length > 0 && !subArgs.includes("--non-interactive")) {
       try {
         const prompter = new PiPrompter(ctx);
-        const activeMirror = getActiveMirrorSession();
-        const runOptions = runs.map((r) => {
-          const isMirrorOpen = activeMirror && activeMirror.runId === r.fullRunId;
-          const mirrorTag = isMirrorOpen ? " [open mirror]" : "";
-          return {
-            label: `${r.statusBadge}  ${r.runId}  ${r.repo}  ${r.cost}${mirrorTag}`,
-            value: r.fullRunId,
-          };
-        });
+        const runOptions = runs.map((r) => ({
+          label: `${r.statusBadge}  ${r.runId}  ${r.repo}  ${r.cost}`,
+          value: r.fullRunId,
+        }));
 
         const selectedRunId = await prompter.select("Select a cloud run:", runOptions);
         if (selectedRunId) {
-          const isSelectedMirrorOpen = activeMirror && activeMirror.runId === selectedRunId;
-          const attachLabel = isSelectedMirrorOpen
-            ? "Detach mirror session"
-            : "Attach mirror session";
-          const attachCmd = isSelectedMirrorOpen ? "detach" : `attach ${selectedRunId}`;
-
           const actionOptions = [
-            { label: attachLabel, value: attachCmd },
             { label: "View status detail card", value: `status ${selectedRunId}` },
-            { label: "Open live dashboard", value: "dashboard" },
             { label: "View CloudWatch logs", value: `logs ${selectedRunId}` },
             { label: "Create GitHub pull request", value: `pr ${selectedRunId}` },
             { label: "Stop MicroVM", value: `stop ${selectedRunId}` },

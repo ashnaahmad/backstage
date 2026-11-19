@@ -128,7 +128,7 @@ export async function handleScheduledLaunch(
       record.promptDispatchedAt = now().toISOString();
     } else {
       record.status = "failed";
-      record.error = "runner did not accept the prompt";
+      record.error = "prompt dispatch not confirmed";
       record.terminatedForFailure = await terminate(deps, result.microvmId, log);
     }
   } catch (err) {

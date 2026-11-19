@@ -104,7 +104,7 @@ export function mapAwsError(
     return new MappedAwsError({
       message: `Access denied while performing '${missingAction}' in region ${region}`,
       code: "ACCESS_DENIED",
-      remediation: `Ensure your AWS IAM user or role has the required permissions. Attach the 'OperatorPolicy' managed policy created by the pi-cloud-agents core stack or run '/cloud iam-policy'.`,
+      remediation: `Ensure your AWS IAM user or role has the required permissions. Attach the 'OperatorPolicy' managed policy created by the pi-cloud-agents core stack or run 'pi-cloud-agents iam-policy'.`,
       originalError: err,
       region,
       action: missingAction,
@@ -159,7 +159,7 @@ export function mapAwsError(
     return new MappedAwsError({
       message: `Lambda MicroVMs are not supported or unavailable in region '${region}'`,
       code: "UNSUPPORTED_REGION",
-      remediation: `Switch your AWS region to a supported region: ${SUPPORTED_MICROVM_REGIONS.join(", ")}. Run '/cloud config' to update your default region.`,
+      remediation: `Switch your AWS region to a supported region: ${SUPPORTED_MICROVM_REGIONS.join(", ")}. Run 'pi-cloud-agents config' to update your default region.`,
       originalError: err,
       region,
       action,
@@ -179,7 +179,7 @@ export function mapAwsError(
     return new MappedAwsError({
       message: `Requested AWS resource${resourceName} was not found in region ${region}`,
       code: "RESOURCE_NOT_FOUND",
-      remediation: `Verify that the resource exists and has not been deleted. If the infrastructure is not yet set up, run '/cloud setup'.`,
+      remediation: `Verify that the resource exists and has not been deleted. If the infrastructure is not yet set up, run 'pi-cloud-agents setup'.`,
       originalError: err,
       region,
       action,
@@ -206,7 +206,7 @@ export function mapAwsError(
   return new MappedAwsError({
     message: `${action} failed in region ${region}: ${cleanMsg}`,
     code: rawName || "AWS_ERROR",
-    remediation: `Inspect error details above and check AWS CloudWatch logs or run '/cloud doctor'.`,
+    remediation: `Inspect error details above and check AWS CloudWatch logs or run 'pi-cloud-agents doctor'.`,
     originalError: err,
     region,
     action,

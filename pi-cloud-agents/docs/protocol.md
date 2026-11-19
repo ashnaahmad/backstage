@@ -27,10 +27,10 @@ All client requests to the runner API (port 8080) pass through the AWS Lambda Mi
 | `x-aws-proxy-port` | `8080` | Target port inside the MicroVM. Direct external access to port 9000 is blocked (returns 403 Forbidden). |
 
 ### WebSocket Subprotocols
-When connecting to WebSocket endpoints over the proxy (`wss://<endpoint>/ws/rpc` or `wss://<endpoint>/shell`), the following subprotocols must be negotiated:
+When connecting to the runner WebSocket endpoint over the proxy (`wss://<endpoint>/v1/rpc`), the following subprotocols must be negotiated:
 - `lambda-microvms`
 - `lambda-microvms.authentication.<token>`
-- `lambda-microvms.port.8080` (or `lambda-microvms.port.8022` for the shell daemon)
+- `lambda-microvms.port.8080`
 
 ---
 
@@ -38,7 +38,7 @@ When connecting to WebSocket endpoints over the proxy (`wss://<endpoint>/ws/rpc`
 
 JSON Schema: [`docs/schemas/launch-payload.v1.json`](schemas/launch-payload.v1.json)
 
-The `LaunchPayload` is constructed locally by the launch command (`/cloud new`) and delivered to the MicroVM via the AWS Lambda MicroVM `RunMicrovm` API in `runHookPayload`.
+The `LaunchPayload` is constructed locally by the launcher (`cloud_agent` action `launch`, or a scheduled task) and delivered to the MicroVM via the AWS Lambda MicroVM `RunMicrovm` API in `runHookPayload`.
 
 ### Size Constraints
 - **Budget**: Maximum 3,584 bytes (3.5 KB) serialized UTF-8 length.
@@ -292,9 +292,9 @@ Old runner images that never publish idle cannot provide pre-termination settlem
 
 ### Publication policy and Git recovery
 
-`cloud_agent(action="launch", autoPush=false, ...)` disables runner-owned pushes. `/cloud new`
-uses the same launch policy from `/cloud config defaults.autoPush false`. A per-run tool option
-overrides the configuration value. If neither is set, the historical default remains true.
+`cloud_agent(action="launch", autoPush=false, ...)` disables runner-owned pushes. Without a per-run
+option, launch uses `defaults.autoPush` (for example `node dist/cli/main.js config defaults.autoPush false`).
+A per-run tool option overrides the configuration value. If neither is set, the historical default remains true.
 No-push does not disable auto-committing dirty work or preserving Git bundles; a clean/read-only
 no-push turn does not publish a remote branch either. No GitHub credential is needed for bundle
 recovery. A push failure does not prevent independent preservation.
@@ -315,9 +315,8 @@ still be restored at its recorded commit, but read the error before stopping a l
 or deepening failure may require retrying the checkpoint while the VM/source is still available.
 Archives expire under the existing per-run storage retention policy.
 
-Known existing limitation: `/cloud continue` does not restore the prior session/workspace and
-currently prepares a new launch from the local checkout. It is not verified conversation
-continuation; this bounded assignment round trip does not implement the separate 8-hour restore path.
+Known limitation: there is no cross-VM restore path. A run cannot continue past the 8-hour MicroVM
+lifetime; carry forward the recovered result and Git bundle into a new launch with a handoff.
 
 ## 8. Error Responses & Codes
 

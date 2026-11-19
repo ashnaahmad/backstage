@@ -6,7 +6,6 @@
 import { CloudFormationClient, DescribeStacksCommand } from "@aws-sdk/client-cloudformation";
 import { CloudWatchLogsClient, FilterLogEventsCommand } from "@aws-sdk/client-cloudwatch-logs";
 import {
-  CreateMicrovmAuthTokenCommand,
   GetMicrovmCommand,
   LambdaMicrovmsClient,
   ResumeMicrovmCommand,
@@ -23,7 +22,6 @@ import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createCloudRunPullRequest,
-  createCloudRunShellSession,
   fetchCloudRunLogs,
   resumeCloudRun,
   stopCloudRun,
@@ -34,7 +32,6 @@ import {
   handleCloudLogsCommand,
   handleCloudPrCommand,
   handleCloudResumeCommand,
-  handleCloudShellCommand,
   handleCloudStopCommand,
   handleCloudSuspendCommand,
 } from "../../extension/commands/controls.js";
@@ -348,49 +345,6 @@ describe("T4.8 Cloud Agent Controls", () => {
     });
   });
 
-  describe("createCloudRunShellSession", () => {
-    it("mints 15-minute token scoped to port 8022 and returns WebSocket connection info", async () => {
-      s3Mock
-        .on(ListObjectsV2Command)
-        .resolves({ Contents: [{ Key: "runs/run-20260906-7f3a2c/manifest.json" }] });
-
-      s3Mock.on(GetObjectCommand).resolves({
-        Body: mockS3Body(JSON.stringify(activeManifest)) as unknown as never,
-      });
-
-      microvmsMock.on(CreateMicrovmAuthTokenCommand).resolves({
-        authToken: {
-          "X-aws-proxy-auth": "mock-jwe-shell-token-secret-12345",
-        },
-      });
-
-      const s3Client = new S3Client({ region: "us-east-1" });
-      const microvmsClient = new LambdaMicrovmsClient({ region: "us-east-1" });
-
-      const session = await createCloudRunShellSession("7f3a2c", {
-        bucket: "test-bucket",
-        s3Client,
-        microvmsClient,
-      });
-
-      expect(session.microvmId).toBe("mvm-0123456789abcdef0");
-      expect(session.port).toBe(8022);
-      expect(session.wsUrl).toBe(
-        "wss://mvm-0123456789abcdef0.microvm.us-east-1.amazonaws.com/shell",
-      );
-      expect(session.subprotocols).toContain("lambda-microvms");
-      expect(session.subprotocols).toContain("lambda-microvms.port.8022");
-      expect(session.subprotocols).toContain(
-        "lambda-microvms.authentication.mock-jwe-shell-token-secret-12345",
-      );
-
-      const calls = microvmsMock.commandCalls(CreateMicrovmAuthTokenCommand);
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.args[0].input.allowedPorts).toEqual([{ port: 8022 }]);
-      expect(calls[0]?.args[0].input.expirationInMinutes).toBe(15);
-    });
-  });
-
   describe("Extension command handlers", () => {
     it("handles /cloud stop with prompt and execution", async () => {
       s3Mock
@@ -452,25 +406,6 @@ describe("T4.8 Cloud Agent Controls", () => {
       const prRes = await handleCloudPrCommand(["7f3a2c", "My PR Title"], { hasUI: false });
       expect(prRes.handled).toBe(true);
       expect(prRes.output).toContain("Work branch: pi-cloud/7f3a2c");
-    });
-
-    it("handles /cloud shell", async () => {
-      s3Mock
-        .on(ListObjectsV2Command)
-        .resolves({ Contents: [{ Key: "runs/run-20260906-7f3a2c/manifest.json" }] });
-
-      s3Mock.on(GetObjectCommand).resolves({
-        Body: mockS3Body(JSON.stringify(activeManifest)) as unknown as never,
-      });
-
-      microvmsMock.on(CreateMicrovmAuthTokenCommand).resolves({
-        authToken: { "X-aws-proxy-auth": "secret-shell-token" },
-      });
-
-      const shellRes = await handleCloudShellCommand(["7f3a2c"], { hasUI: false });
-      expect(shellRes.handled).toBe(true);
-      expect(shellRes.output).toContain("Interactive shell session ready");
-      expect(shellRes.output).toContain("port 8022");
     });
   });
 });

@@ -248,7 +248,7 @@ export async function fetchRunStatusDetails(
   }
   if (!bucket) {
     throw new Error(
-      `CloudFormation stack '${stackName}' bucket output not found. Re-run /cloud setup.`,
+      `CloudFormation stack '${stackName}' bucket output not found. Re-run 'pi-cloud-agents setup'.`,
     );
   }
 

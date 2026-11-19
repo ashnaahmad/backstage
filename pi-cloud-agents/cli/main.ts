@@ -178,7 +178,8 @@ pi-cloud-agents v${CLI_VERSION}
 Autonomous cloud coding agents in AWS Lambda MicroVMs.
 
 Usage:
-  npx pi-cloud-agents <command> [options]
+  pi-cloud-agents <command> [options]
+  (from a source checkout: node dist/cli/main.js <command> [options])
 
 Commands:
   setup     Set up AWS CloudFormation infrastructure, runner image, and secrets
@@ -188,6 +189,8 @@ Commands:
   sync      Synchronize local pi credentials bundle to AWS Secrets Manager & S3
   update    Check for runner image updates and deploy latest version
   destroy   Tear down cloud agent infrastructure and delete AWS resources
+  diag      Export a diagnostics bundle (manifest, logs) for a run
+  iam-policy  Print the operator IAM policy (JSON, or --yaml for CloudFormation)
 
 Options:
   --help, -h          Show this help text
@@ -354,7 +357,7 @@ export async function runCli(argv = process.argv): Promise<number> {
           if (execRes.imageArn) console.log(`Runner Image:     ${execRes.imageArn}`);
           if (execRes.bucketName) console.log(`Storage Bucket:   ${execRes.bucketName}`);
           console.log(
-            "\nReady: Launch your first cloud agent with '/cloud new' or verify with '/cloud verify'.",
+            "\nReady: Launch your first cloud agent with the cloud_agent tool (action: launch) or verify with 'pi-cloud-agents verify'.",
           );
         }
 

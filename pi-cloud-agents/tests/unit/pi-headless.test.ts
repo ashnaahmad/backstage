@@ -1,17 +1,12 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { AssistantMessageEvent, Context, Model, UserMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   PINNED_PI_VERSION,
-  formatPiHeadlessTable,
   isArm64Architecture,
   isNodeVersionValid,
-  runPiHeadlessProcess,
-  runPiHeadlessSpike,
-  simulatePiHeadlessExecution,
   validateDockerfile,
 } from "../../core/aws/pi-headless.js";
 import mockLlmExtension, {
@@ -21,9 +16,14 @@ import mockLlmExtension, {
   SCRIPTED_TOOL_COMMAND,
   streamMockLlm,
 } from "../../runner/pi-extensions/mock-llm.js";
+import { PINNED_PI_VERSION as IMAGE_ZIP_PI_VERSION } from "../../scripts/build-image-zip.js";
 
-describe("T0.5 Pi Headless & Mock LLM Provider Spike", () => {
+describe("Pinned Pi image checks and mock LLM provider", () => {
   describe("image/Dockerfile v0 Validation", () => {
+    it("keeps the doctor and image ZIP manifest on the same pinned Pi version", () => {
+      expect(PINNED_PI_VERSION).toBe(IMAGE_ZIP_PI_VERSION);
+    });
+
     it("validates the real image/Dockerfile against AL2023 ARM64 requirements", () => {
       const dockerfilePath = path.resolve(process.cwd(), "image", "Dockerfile");
       expect(fs.existsSync(dockerfilePath)).toBe(true);
@@ -227,70 +227,6 @@ WORKDIR /app
       if (firstBlock && firstBlock.type === "text") {
         expect(firstBlock.text).toBe("Done: created hello.txt");
       }
-    });
-  });
-
-  describe("RPC Execution Simulation & Real Headless Process", () => {
-    it("simulates RPC execution and generates verified output", async () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sim-test-"));
-      try {
-        const result = await simulatePiHeadlessExecution({ workspaceDir: tempDir });
-        expect(result.success).toBe(true);
-        expect(result.toolExecutionStartSeen).toBe(true);
-        expect(result.toolExecutionEndSeen).toBe(true);
-        expect(result.agentSettledSeen).toBe(true);
-        expect(result.fileCreated).toBe(true);
-        expect(result.fileContent).toBe("hello");
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
-    });
-
-    it("runs live headless pi process with mock-llm extension and verifies hello.txt creation", async () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-proc-test-"));
-      const extensionPath = path.resolve(process.cwd(), "runner", "pi-extensions", "mock-llm.ts");
-
-      try {
-        const result = await runPiHeadlessProcess({
-          workspaceDir: tempDir,
-          extensionPath,
-          timeoutMs: 15000,
-        });
-
-        expect(result.success).toBe(true);
-        expect(result.toolExecutionEndSeen).toBe(true);
-        expect(result.agentSettledSeen).toBe(true);
-        expect(result.fileCreated).toBe(true);
-        expect(result.fileContent).toBe("hello");
-        expect(result.finalAssistantText).toBe("Done: created hello.txt");
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
-    }, 20000);
-  });
-
-  describe("Overall Spike Runner & Formatter", () => {
-    it("executes full T0.5 spike in simulation mode and produces PASS report", async () => {
-      const report = await runPiHeadlessSpike({
-        region: "us-east-1",
-        simulate: true,
-      });
-
-      expect(report.verdict).toBe("PASS");
-      expect(report.environment.piVersion).toBe(PINNED_PI_VERSION);
-      expect(report.environment.piVersionMatch).toBe(true);
-      expect(report.environment.nodeVersionValid).toBe(true);
-      expect(report.environment.dockerfileValid).toBe(true);
-      expect(report.rpcEvents.toolExecutionEndSeen).toBe(true);
-      expect(report.rpcEvents.agentSettledSeen).toBe(true);
-      expect(report.fileVerification.matchesExpected).toBe(true);
-      expect(report.cleanupStatus).toBe("CLEANED");
-
-      const table = formatPiHeadlessTable(report);
-      expect(table).toContain("Pi Headless & Mock LLM Spike (T0.5)");
-      expect(table).toContain("Verdict: SUCCESS");
-      expect(table).toContain("✓ PASS");
-      expect(table).not.toContain("✗ FAIL");
     });
   });
 });

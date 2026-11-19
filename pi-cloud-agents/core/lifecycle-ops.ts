@@ -1,7 +1,7 @@
 /**
  * Cloud Infrastructure Lifecycle Operations (T4.10).
- * Implements `/cloud update` (drift check, artifact upload, stack update, version prune, bundle sync)
- * and `/cloud destroy` (typed confirmation, VM termination, S3 purge, secret force-deletion, stack teardown).
+ * Implements `pi-cloud-agents update` (drift check, artifact upload, stack update, version prune, bundle sync)
+ * and `pi-cloud-agents destroy` (typed confirmation, VM termination, S3 purge, secret force-deletion, stack teardown).
  */
 
 import crypto from "node:crypto";
@@ -128,7 +128,7 @@ function computeFileSha256(filePath: string): string {
 }
 
 /**
- * Executes `/cloud update` workflow:
+ * Executes `pi-cloud-agents update` workflow:
  * 1. Checks image drift against local artifacts / manifest.
  * 2. Uploads updated runner and controller zips.
  * 3. Updates image CloudFormation stack.
@@ -165,7 +165,7 @@ export async function executeCloudUpdate(
   const bucketName = coreOutputs.BucketName;
   if (!bucketName) {
     throw new Error(
-      `CloudFormation stack '${stackName}' has no BucketName output. Re-run '/cloud setup'.`,
+      `CloudFormation stack '${stackName}' has no BucketName output. Re-run 'pi-cloud-agents setup'.`,
     );
   }
 
@@ -210,13 +210,13 @@ export async function executeCloudUpdate(
     };
   }
 
-  // The image stack is re-deployed with the same inputs `/cloud setup` used; all of them come
+  // The image stack is re-deployed with the same inputs `pi-cloud-agents setup` used; all of them come
   // from the core stack outputs, so check them before any upload side effect.
   const buildRoleArn = coreOutputs.BuildRoleArn;
   const executionRoleArn = coreOutputs.ExecutionRoleArn;
   if (!buildRoleArn || !executionRoleArn) {
     throw new Error(
-      `CloudFormation stack '${stackName}' has no BuildRoleArn/ExecutionRoleArn outputs (CORE_OUTPUTS_MISSING); the image stack cannot be updated. Re-run '/cloud setup' to repair the core stack.`,
+      `CloudFormation stack '${stackName}' has no BuildRoleArn/ExecutionRoleArn outputs (CORE_OUTPUTS_MISSING); the image stack cannot be updated. Re-run 'pi-cloud-agents setup' to repair the core stack.`,
     );
   }
   const imageLogGroup = coreOutputs.ImageLogGroup || `/aws/lambda/microvms/${imageName}`;
@@ -312,7 +312,7 @@ export async function executeCloudUpdate(
 }
 
 /**
- * Executes `/cloud destroy` workflow:
+ * Executes `pi-cloud-agents destroy` workflow:
  * 1. Confirms destruction with user.
  * 2. Terminates any active MicroVMs in region.
  * 3. Empties all objects and version markers from S3 bucket.

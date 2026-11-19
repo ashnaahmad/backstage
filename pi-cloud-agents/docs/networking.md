@@ -12,7 +12,7 @@ AWS Lambda MicroVMs provide managed network connectors for common ingress and eg
 |---|---|---|
 | `ALL_INGRESS` | `arn:aws:lambda:<region>:aws:network-connector:aws-network-connector:ALL_INGRESS` | Allows HTTP, HTTPS, WebSocket, gRPC, and SSE traffic to the MicroVM endpoint |
 | `HTTP_INGRESS` | `arn:aws:lambda:<region>:aws:network-connector:aws-network-connector:HTTP_INGRESS` | Restricts ingress to HTTP/HTTPS/WebSocket port 8080 |
-| `SHELL_INGRESS` | `arn:aws:lambda:<region>:aws:network-connector:aws-network-connector:SHELL_INGRESS` | Enables WebSocket SSH/PTY shell access on port 8022 (`/cloud shell`) |
+| `SHELL_INGRESS` | `arn:aws:lambda:<region>:aws:network-connector:aws-network-connector:SHELL_INGRESS` | Port 8022 shell ingress. Only the launcher's programmatic `enableShell` option selects it; no config key, shell daemon or client ships in this package. |
 | `NO_INGRESS` | `arn:aws:lambda:<region>:aws:network-connector:aws-network-connector:NO_INGRESS` | Fully blocks all incoming proxy connections |
 | `INTERNET_EGRESS` | `arn:aws:lambda:<region>:aws:network-connector:aws-network-connector:INTERNET_EGRESS` | Default outbound access to public internet (GitHub, LLM APIs, npm) |
 
@@ -35,9 +35,10 @@ aws lambda-core create-network-connector \
 ```
 
 ### Configuring pi-cloud-agents to use the Custom Connector
-Update `~/.pi/agent/pi-cloud-agents.json` or run:
-```bash
-/cloud config egressConnectorArn arn:aws:lambda:us-east-1:123456789012:network-connector:pi-cloud-corp-vpc
+Set the top-level `egressConnectorArn` in the selected `pi-cloud-agents.json` (the CLI config editor's
+`defaults.egressConnectorArn` key is not read by launch):
+```json
+{ "egressConnectorArn": "arn:aws:lambda:us-east-1:123456789012:network-connector:pi-cloud-corp-vpc" }
 ```
 
 When configured, `RunMicrovm` attaches the custom VPC connector instead of the default `INTERNET_EGRESS`.

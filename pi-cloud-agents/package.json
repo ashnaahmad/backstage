@@ -1,7 +1,7 @@
 {
   "name": "pi-cloud-agents",
   "version": "0.1.0",
-  "description": "Cloud agents for pi in AWS Lambda MicroVMs with rich local mirroring",
+  "description": "Bounded Pi coding assignments in AWS Lambda MicroVMs with durable result and Git recovery",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -39,12 +39,7 @@
     "prepublishOnly": "npm run check && npm run build",
     "e2e:local": "tsx scripts/e2e-local.ts",
     "e2e:aws": "tsx scripts/e2e-aws.ts",
-    "aws:cleanup": "tsx scripts/aws-cleanup.ts",
-    "spike:aws-readiness": "tsx scripts/spike/aws-readiness.ts",
-    "spike:credential-portability": "tsx scripts/spike/credential-portability.ts",
-    "spike:hello-microvm": "tsx scripts/spike/hello-microvm.ts",
-    "spike:guest-capabilities": "tsx scripts/spike/guest-capabilities.ts",
-    "spike:pi-headless": "tsx scripts/spike/pi-headless.ts"
+    "aws:cleanup": "tsx scripts/aws-cleanup.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

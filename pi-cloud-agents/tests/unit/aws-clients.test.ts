@@ -138,7 +138,7 @@ describe("AWS Client Factory & Error Mapping (T4.2)", () => {
 
       expect(mapped.code).toBe("RESOURCE_NOT_FOUND");
       expect(mapped.message).toContain("pi-cloud-agents-core");
-      expect(mapped.remediation).toContain("/cloud setup");
+      expect(mapped.remediation).toContain("pi-cloud-agents setup");
     });
 
     it("maps network connectivity failures to NETWORK_ERROR", () => {

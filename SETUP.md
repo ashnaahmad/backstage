@@ -347,8 +347,8 @@ Rotating OAuth credentials also require `providers.oauthOptIn`.
 For a personal ChatGPT trial, select provider `openai`, model
 `gpt-6.1-sol`, and `oauthOptIn: ["openai"]`. Disable Bedrock, use
 `github.mode: "none"` with an owned public repository, and pass
-`autoPush: false` through `cloud_agent`. For `/cloud new`, set
-`defaults.autoPush: false` in the selected cloud configuration. Bound tests
+`autoPush: false` through `cloud_agent`; also set `defaults.autoPush: false`
+in the selected cloud configuration as the fallback. Bound tests
 with `defaults.maxDurationHours: 1` and `defaults.maxConcurrent: 1`.
 Do not use an existing stack that holds credentials from another account.
 A fresh stack provides a separate artifact bucket, execution role and

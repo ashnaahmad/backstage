@@ -4,17 +4,19 @@ A modified source snapshot of [AntApper/pi-cloud-agents](https://github.com/AntA
 
 This is an experimental component. Use [Backstage's cloud setup instructions](../SETUP.md#aws-cloud-agent-experiment) for configuration and current limitations. The upstream package description is not a verification record for this modified setup. Cloud deployments and runs incur AWS and provider costs.
 
-See [bounded-assignment verification](docs/evidence/personal-assignment-round-trip.md) for exact-commit launch, durable answers and Git recovery without publication. `/cloud attach`, cross-VM continuation and unattended OAuth renewal remain experimental.
+See [bounded-assignment verification](docs/evidence/personal-assignment-round-trip.md) for exact-commit launch, durable answers and Git recovery without publication. There is no local attach view or cross-VM restore; unattended OAuth renewal remains unverified.
 
 ## Source layout
 
 - `cli/` and `core/`: local configuration, deployment and run management
 - `runner/` and `image/`: remote agent runtime and image
-- `extension/`: Pi interface
+- `extension/`: `cloud_agent` assignment tool and `/cloud` run controls (`list`, `status`, `stop`, `suspend`, `resume`, `logs`, `pr`, `help`). Setup and configuration use the standalone CLI.
 - `scheduled/`: one-shot task scheduling and result retrieval
 - `infra/`: infrastructure templates
 - `shared/` and `docs/schemas/`: shared contracts
 - `tests/`: unit and integration checks
+
+Messages and help use `pi-cloud-agents <command>` for the CLI. From a built source checkout, run `node dist/cli/main.js <command>` instead.
 
 ## Development
 

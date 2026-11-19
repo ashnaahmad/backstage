@@ -1,11 +1,10 @@
 /**
  * Extension command handlers for cloud agent controls (T4.8).
- * Provides /cloud stop, /cloud suspend, /cloud resume, /cloud logs, /cloud pr, and /cloud shell.
+ * Provides /cloud stop, /cloud suspend, /cloud resume, /cloud logs and /cloud pr.
  */
 
 import {
   createCloudRunPullRequest,
-  createCloudRunShellSession,
   fetchCloudRunLogs,
   resumeCloudRun,
   stopCloudRun,
@@ -276,54 +275,5 @@ export async function handleCloudPrCommand(
     const errorMsg = `Failed to create pull request for run '${runId}': ${(err as Error).message}`;
     if (ctx?.hasUI && ctx.ui?.notify) ctx.ui.notify(errorMsg, "error");
     return { subcommand: "pr", args: subArgs, output: errorMsg, handled: true };
-  }
-}
-
-/**
- * /cloud shell <runId>
- */
-export async function handleCloudShellCommand(
-  subArgs: string[],
-  ctx?: RouteContext,
-): Promise<RouteResult> {
-  const runId = await getOrPromptRunId(subArgs, "open shell in", ctx);
-
-  if (!runId) {
-    const usageMsg = "Usage: /cloud shell <runId>\nExample: /cloud shell 7f3a2c";
-    if (ctx?.hasUI && ctx.ui?.notify) ctx.ui.notify(usageMsg, "warning");
-    return { subcommand: "shell", args: subArgs, output: usageMsg, handled: true };
-  }
-
-  try {
-    if (ctx?.hasUI && ctx.ui?.notify) {
-      ctx.ui.notify(
-        `Minting interactive shell token for run '${runId}' (expires in 15m)...`,
-        "info",
-      );
-    }
-
-    const sessionInfo = await createCloudRunShellSession(runId);
-
-    const lines: string[] = [
-      `Interactive shell session ready for run '${runId}' (experimental):`,
-      `MicroVM:   ${sessionInfo.microvmId}`,
-      `Endpoint:  ${sessionInfo.endpoint}:${sessionInfo.port}`,
-      "Protocol:  WebSocket (port 8022 subprotocol)",
-      "Expires:   In 15 minutes",
-      "",
-      "WebSocket connection URL:",
-      `  ${sessionInfo.wsUrl}`,
-      "",
-      "Notice: Shell access is secured with expiring token authentication.",
-    ];
-
-    const output = lines.join("\n");
-    if (ctx?.hasUI && ctx.ui?.notify) ctx.ui.notify(output, "info");
-
-    return { subcommand: "shell", args: subArgs, output, handled: true };
-  } catch (err: unknown) {
-    const errorMsg = `Failed to open shell for run '${runId}': ${(err as Error).message}`;
-    if (ctx?.hasUI && ctx.ui?.notify) ctx.ui.notify(errorMsg, "error");
-    return { subcommand: "shell", args: subArgs, output: errorMsg, handled: true };
   }
 }
