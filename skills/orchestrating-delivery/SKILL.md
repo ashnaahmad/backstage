@@ -26,6 +26,18 @@ Use the existing coordination record and landing-map authority. Do not establish
 
 Orchestrators run in the project's main checkout; implementers use worktrees. Preserve the main checkout's branch and source. Use the configured role models and session-launch rules. Record the durable session identity and current pane/window so a replacement pane is not mistaken for a different assignment.
 
+### Bind roles to notification recipients
+
+When starting or adopting this workflow, explicitly assign the stack coordinator and record its Codex thread id beside its role in the existing landing map. Record each separate PR orchestrator and relay the same way. Invoking this skill does not register a role or subscribe a chat to notifications.
+
+Each delegation brief must name the immediate handoff recipient, its exact Codex thread id for `ownerThreadId`, and the stack coordinator's thread id when different:
+
+- Implementer and QA handoffs go to their PR orchestrator, or directly to the stack coordinator when it also owns that PR.
+- A separate PR orchestrator assesses the handoff and sends the stack coordinator the tested source, evidence, disposition and next owner/action whenever the delivery state changes. It does not stop at receiving the handoff or updating its own notes.
+- The relay sends review, publication and upstream-change reports to the responsible PR orchestrator and the stack coordinator as specified in the delivery loop.
+
+Pi sessions use [handoff submission](../writing-handoffs/SKILL.md#submitting-to-a-codex-owner) to notify the Codex owner named in their brief; Codex sessions use their supported chat-messaging tool under existing authorisation. The stack coordinator reads the reports and updates the landing map in place. A notification reaches only its addressed chat; it does not notify an upstream coordinator automatically. On an accepted ownership transfer, update the affected briefs' recipients as well as the map.
+
 When transferring work, distinguish delivery of the brief, acknowledgement and acceptance of ownership. Keep the previous owner accountable until the recipient accepts. If an implementer is unavailable or quota-interrupted, restore or explicitly reassign its unfinished work; idle is not completion.
 
 ## Run the delivery loop
