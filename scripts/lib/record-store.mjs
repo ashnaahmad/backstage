@@ -139,7 +139,9 @@ function processRunning(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM' ? true : false; }
 }
 
-async function describeHolder(path) {
+const RECORD_UNLOCK = 'coordination-record.mjs unlock';
+
+async function describeHolder(path, unlockCommand = RECORD_UNLOCK) {
   const text = await readText(lockPath(path)).catch(() => null);
   if (text === null) return 'the lock disappeared while waiting';
   let holder;
@@ -149,12 +151,24 @@ async function describeHolder(path) {
   }
   const alive = holder.host === hostname() ? (processRunning(holder.pid) ? 'running' : 'not running') : `on host ${holder.host}`;
   return `held by ${holder.actor ?? 'unknown actor'} (pid ${holder.pid}, ${alive}) since ${holder.at} for "${holder.command}"; `
-    + `if no write is in progress, run: coordination-record.mjs unlock --token ${holder.token}`;
+    + `if no write is in progress, run: ${unlockCommand} --token ${holder.token}`;
 }
 
-async function acquire(path, details) {
+/**
+ * The exclusive lock beside `path` (`<path>.lock`), shared with other local state files that need the same
+ * contract: never reclaimed automatically; `unlock` removes a dead holder's lock by token.
+ */
+export async function acquireLock(path, details, { timeoutMs, unlockCommand } = {}) {
+  return acquire(path, details, { timeoutMs, unlockCommand });
+}
+
+export async function releaseLock(path, token) {
+  return release(path, token);
+}
+
+async function acquire(path, details, { timeoutMs: requested, unlockCommand } = {}) {
   const token = randomUUID();
-  const timeoutMs = Number(process.env.COORDINATION_LOCK_TIMEOUT_MS ?? 10_000);
+  const timeoutMs = requested ?? Number(process.env.COORDINATION_LOCK_TIMEOUT_MS ?? 10_000);
   const deadline = Date.now() + timeoutMs;
   for (let wait = 10; ; wait = Math.min(wait * 2, 200)) {
     let handle;
@@ -162,7 +176,7 @@ async function acquire(path, details) {
       handle = await open(lockPath(path), constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
     } catch (error) {
       if (error.code !== 'EEXIST') throw new RecordError(`cannot create lock ${lockPath(path)} (${error.code})`, 'io');
-      if (Date.now() >= deadline) throw new RecordError(`record is locked: ${await describeHolder(path)}`, 'locked');
+      if (Date.now() >= deadline) throw new RecordError(`${unlockCommand ? 'state' : 'record'} is locked: ${await describeHolder(path, unlockCommand)}`, 'locked');
       await sleep(wait + Math.floor(Math.random() * wait));
       continue;
     }
@@ -198,7 +212,7 @@ export async function unlock(path, token) {
   }
   try {
     const text = await readText(lockPath(path));
-    if (text === null) throw new RecordError('the record is not locked', 'missing');
+    if (text === null) throw new RecordError(`${path} is not locked`, 'missing');
     let holder;
     try { holder = JSON.parse(text); } catch { throw new RecordError(`lock ${lockPath(path)} has no token; remove it by hand after checking no write is in progress`, 'locked'); }
     if (holder.token !== token) throw new RecordError(`lock token does not match (held: ${holder.token})`, 'locked');

@@ -73,6 +73,11 @@ after installation rather than assume identical resolution.
   the system `libexpat`, which lacks a required symbol. No AWS
   MCP server or broad skill collection is required. Setup commands are in [SETUP.md](SETUP.md#aws-cloud-agent-experiment);
   vendored `pi-cloud-agents/` needs Node >=22.19.
+- **Codex stop gate:** Codex with lifecycle hooks (`Stop`,
+  `Interrupt`), trusted by the user in `/hooks` or Settings >
+  Hooks; Node and the ccmux daemon for delegate state. Tested
+  with the Codex Desktop app's bundled CLI 0.166.0-alpha.6. See
+  [SETUP.md](SETUP.md#codex-stop-gate).
 - **Scheduled cloud tasks (prototype):** pi-tick
   (`gscode1/pi-tick` at `74c9cd7`, MIT) with the harness
   patch, installed by `scripts/install-patched-pi-tick.sh`.

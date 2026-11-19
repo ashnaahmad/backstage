@@ -628,6 +628,136 @@ CLI preload that changes the record between reads, temporary home,
 record and sessions, no tmux):
 `node --test scripts/tests/task-brief.test.mjs`.
 
+### Codex stop gate
+
+`scripts/codex-stop-gate.mjs` keeps an accountable Codex
+orchestrator from ending its turn while a delegate's reply is due
+or still being worked on, the failure where a dispatched Pi
+session's reply was left unread. It is a Codex `Stop` and
+`Interrupt` hook plus commands the orchestrator runs. Installing
+the hook enrolls nothing: a session is checked only after it runs
+`enroll` itself, and an unenrolled session gets `{}` at once.
+
+```sh
+# Inside Codex; <harness> is this checkout.
+gate() { node <harness>/scripts/codex-stop-gate.mjs "$@"; }
+gate enroll --as orchestrator \
+  --record "$COORDINATION_RECORD"
+# Note the time, then delegate:
+since=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+ccmux send ...
+gate watch feat --since "$since"
+# Read the reply, act, record the outcome:
+gate settle feat
+# or: gate block feat --reason ...
+# or: gate schedule feat --owner ... \
+#       --at ... --ref wake.md
+gate pause --reason ...  # resume re-arms
+gate status
+```
+
+The session id comes from `CODEX_THREAD_ID` (inside Codex,
+commands act on that session only; `--session` is for operators
+outside Codex). `--as` names the coordination-record actor the
+session represents; `watch` accepts only assignments that actor is
+accountable for, and the watched delegate is the assignment's
+recorded implementer.
+
+On `Stop`, each awaiting watch is checked with
+[session-snapshot](#session-snapshot) and one read of the record:
+
+- reply delivered, delegate interrupted or errored: the turn
+  continues with instructions to read it and record an outcome;
+- delegate still working: it continues with one bounded
+  blocking `wait` (default 300 s, `enroll --wait-seconds`);
+- sent message not visible, or state unknown: it continues to
+  inspect;
+- accountable or implementer changed in the record: the watch is
+  stale and never continues the session.
+
+`blocked` and `scheduled` watches let the turn end. `schedule`
+is an attestation that an already-arranged wake or handoff
+checks later: `--ref` names a file describing it (read and hashed
+when recorded), `--at` must be in the future, and the gate does
+not verify that scheduler. Once `--at` passes without an outcome,
+the next `Stop` reconsiders follow-through here; nothing wakes the
+session at that time.
+
+**Pausing.** A user interruption (Esc, or `turn/interrupt`) or
+`pause` writes a marker; any unacknowledged marker pauses the
+whole gate until `resume`, which removes only the markers it has
+read. Plain-language "stop" relies on the agent running `pause`;
+the gate does not interpret prose.
+
+**Bounding.** A continuation counts as acted on only when the agent
+records an outcome, or a `wait` started on busy work and either
+observed a reply (or other due state) or lasted the full enrolled
+period with every observation busy; it credits only the
+continuation current when it began, and not while paused. After
+`--max-unacted` (default 3, an engineering default) consecutive
+unacted continuations the watch becomes `needs-attention`: `Stop`
+stops continuing for it and warns at every turn end. Re-arming it
+(`watch` with the same real send time) is the explicit recovery;
+replaying `watch` on an active watch changes nothing. A slow
+delegate can be waited on indefinitely, one bounded wait per
+continuation.
+
+**Failure modes.** Any error in the gate, a held state lock or an
+unreadable record lets the turn end with a warning. `Stop`
+observes delegates without the state lock (Codex ends the hook
+process when the user interrupts mid-check) and holds it only to
+decide and save; a crash in that short window leaves a lock that
+`unlock --token` removes once its holder is gone, as for the
+coordination record. The final pause read narrows, but cannot
+close, the interval before Codex acts on a returned continuation.
+Two overlapping `Stop` deliveries are not deduplicated.
+
+**Install.** Add to `$CODEX_HOME/hooks.json` (default
+`~/.codex/hooks.json`), with absolute paths for this machine (hooks
+run without your shell's `PATH`; `command -v node`):
+
+```json
+{"hooks": {
+  "Stop": [{"hooks": [{
+    "type": "command", "timeout": 30,
+    "command": "/abs/node /abs/gate.mjs hook"
+  }]}],
+  "Interrupt": [{"hooks": [{
+    "type": "command", "timeout": 3,
+    "command": "/abs/node /abs/gate.mjs hook"
+  }]}]
+}}
+```
+
+Here `/abs/gate.mjs` is this checkout's
+`scripts/codex-stop-gate.mjs`.
+
+New or changed hooks do not run until trusted: review and trust
+them in `/hooks` (CLI) or Codex **Settings > Hooks** (Desktop).
+That is the user's step; do not write `trusted_hash` into live
+configuration or bypass trust. Trust records the hook definition,
+so it does not cover later edits to the script; review the diff
+when updating the harness. State lives in
+`$XDG_STATE_HOME/harness/codex-stop-gate` (default
+`~/.local/state/...`, or `CODEX_STOP_GATE_HOME`).
+
+**Verification.** Unit and process tests (temporary gate home and
+record, stub ccmux daemon, synthetic Pi transcripts, no tmux):
+`node --test scripts/tests/codex-stop-gate.test.mjs`. Native
+lifecycle checks spend model calls in a disposable `CODEX_HOME`
+(linking the existing `auth.json`) and never touch live
+configuration:
+`CODEX_BIN=<codex> CODEX_E2E_MODEL=<model> node scripts/tests/codex-stop-gate.e2e.mjs`.
+They use real Codex and model with a synthetic delegate; `exec`
+scenarios pass `--dangerously-bypass-hook-trust` for those runs
+only, and app-server scenarios record trust in the disposable
+home. They were run with the CLI bundled in the Codex Desktop app
+(0.166.0-alpha.6) and `gpt-6.2-astra`; point `CODEX_BIN` at the
+CLI whose model access matches the sessions you use.
+
+Rollback: remove the two hook entries (or withdraw sessions with
+`withdraw`); delete the state directory if no longer wanted.
+
 ## Terminal session sidebar and browser QA
 
 Installed trial: ccmux 1.4.4, tmux 3.8 and

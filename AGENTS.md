@@ -19,3 +19,5 @@ For Pi coordination, use `scripts/session-snapshot.mjs <session-id|%pane>` to di
 For assignments adopted into the coordination record, use `scripts/coordination-record.mjs` to update roles and evidence and generate maps/handoffs. Keep the record outside repositories; the brief remains the requirements authority. See [SETUP.md](SETUP.md#coordination-record). Do not migrate an active assignment without coordinating its existing authority.
 
 For brief restoration, record the implementing Pi session’s native id and launch it with the record; see [restoring the current brief](SETUP.md#restoring-the-current-brief). Codex agents read `brief <id>` at the same transitions and before handoff. Later corrections in the conversation take precedence over the restored brief.
+
+Codex orchestrators can opt in to the [Codex stop gate](SETUP.md#codex-stop-gate): enroll as the accountable record actor and watch each assignment after sending work. Record the outcome after following through; pause or resume explicitly. Installing the hooks enrolls no session, and they run only after the user trusts them in Codex.
