@@ -7,6 +7,10 @@ description: Write or update a concise handoff when returning delegated work, ha
 
 Give the recipient enough verified context to assess the result or continue the agreed work without reconstructing the conversation. A handoff transfers context; it does not change the user's requirements, grant access or certify completion.
 
+## Orchestrator location
+
+Run orchestrators in the repository’s main checkout, never in worktrees. Worktrees are for implementers. When delegating or handing off orchestration, start or resume the orchestrator in the main checkout and give it explicit paths to its implementers’ worktrees. Do not switch the main checkout’s branch or edit implementation sources as part of moving an orchestrator. Preserve the session transcript and verify the resumed process’s working directory.
+
 Choose the form for the recipient: a short reply can return completed delegated work; a durable document helps when work must survive a session or VM. Update an existing handoff to reflect the current state rather than appending a diary. Use the user's requested format and location.
 
 Report meaningful checks and remaining gaps without scorecards. Include only what the recipient needs:
