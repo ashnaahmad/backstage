@@ -12,6 +12,6 @@ Preserve unrelated work and respect project Git permissions. Configure credentia
 
 When testing tmux or ccmux, use an explicitly named isolated server and temporary configuration and state directories. Never let tests reach the user's live workspace.
 
-Use Sol (`--model openai/gpt-6.2-sol`) for implementing Pi agents and Astra (`--model openai/gpt-6.2-astra`) for coordinators. Pass the role’s model explicitly at launch and verify it before dispatching `/implement`; if Sol is unavailable, ask rather than substituting Astra.
+When using orchestrating-delivery, follow its role-model defaults. Otherwise, use Sol (`--model openai/gpt-6.2-sol`) for implementing Pi agents and Astra (`--model openai/gpt-6.2-astra`) for coordinators. Pass the role’s model explicitly at launch and verify it before dispatching `/implement`; if Sol is unavailable, ask rather than substituting Astra.
 
 When coordinating Pi sessions, `ccmux last` may show a reply older than the latest user message. Use `<harness>/scripts/session-snapshot.mjs <session>` to see their order alongside reported activity. A later reply does not establish task fulfilment; the snapshot describes persisted history and cannot see unsaved `/tree` navigation.

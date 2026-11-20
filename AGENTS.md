@@ -8,7 +8,7 @@ Keep documentation consolidated around current state. Distinguish implementation
 
 ## Delegated Pi sessions
 
-Launch implementing agents with `--model openai/gpt-6.2-sol`; Astra (`openai/gpt-6.2-astra`) is for coordination, not an implementation fallback. Verify the session model before dispatching `/implement`.
+When using the orchestrating-delivery skill, follow its role-model defaults. Otherwise, launch implementing agents with `--model openai/gpt-6.2-sol`; Astra (`openai/gpt-6.2-astra`) is for coordination, not an implementation fallback. Verify the session model before dispatching `/implement`.
 
 ## Test isolation
 

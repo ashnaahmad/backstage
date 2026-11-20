@@ -24,6 +24,8 @@ Use the existing coordination record and landing-map authority. Do not establish
 - **Implementer:** owns source changes in its worktree and follows the implementation/verification loop. Separate QA or review agents return evidence to this owner; they do not silently become competing implementers.
 - **Slack/GitHub relay:** watches existing and new human feedback, routes it to the named implementer and PR orchestrator, posts authorised review requests and verified fix responses, and reports delivery and acceptance to the coordinator. It does not independently declare technical work complete.
 
+For this delivery workflow, default to Opus 5.5 (`claude-bridge/claude-opus-5-5`) for implementation, Sol 6.2 (`openai/gpt-6.2-sol`) for independent review, and Astra 6.2 (`openai/gpt-6.2-astra`) for coordination. Pass the role’s model explicitly at launch and verify it before dispatch. Use code-quality to decide when independent review is warranted; these defaults do not add a mandatory review round. Follow an explicit user model choice over these defaults, and ask before substituting an unavailable model.
+
 Orchestrators run in the project's main checkout; implementers use worktrees. Preserve the main checkout's branch and source. Use the configured role models and session-launch rules. Record the durable session identity and current pane/window so a replacement pane is not mistaken for a different assignment.
 
 ### Bind roles to notification recipients

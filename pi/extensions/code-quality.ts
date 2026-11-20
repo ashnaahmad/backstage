@@ -94,7 +94,7 @@ export default function codeQuality(pi: ExtensionAPI) {
     parameters: Type.Object({
       brief: Type.String({ minLength: 1, description: "Original request, preserved guarantees, scope/access limits, current diff or revision, and the consequential question to investigate." }),
       sources: Type.Optional(Type.Array(Type.String(), { description: "Project requirements and design source paths; pointers, not an exploration whitelist." })),
-      model: Type.Optional(Type.String({ description: "Override the default other-provider model: Opus 5.5 for OpenAI, Sol 6.1 for Claude." })),
+      model: Type.Optional(Type.String({ description: "Override the default other-provider model: Opus 5.5 for OpenAI, Sol 6.2 for Claude." })),
     }),
     async execute(id, params, signal, _update, ctx) {
       const refs = resolve(root, "skills/code-quality/references");

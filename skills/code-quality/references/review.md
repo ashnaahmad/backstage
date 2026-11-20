@@ -1,6 +1,6 @@
 # Independent review through Pi
 
-Use a fresh Pi child in the working repository, or an isolated worktree when probes may disturb concurrent work. The child gets the user outcome and source access, not the implementer's conversation. Default to Opus 5.5 for a GPT implementer and Sol 6.1 for a Claude implementer. Existing Pi/Claude logins provide authentication; use only accounts authorised for the source material.
+Use a fresh Pi child in the working repository, or an isolated worktree when probes may disturb concurrent work. The child gets the user outcome and source access, not the implementer's conversation. Default to Opus 5.5 for a GPT implementer and Sol 6.2 for a Claude implementer. Existing Pi/Claude logins provide authentication; use only accounts authorised for the source material.
 
 When `quality_review` is available, pass the short brief below in `brief` and relevant paths in `sources`. It launches the opposite provider by default, with fresh context and these review principles. No passing-check prerequisite applies. Its returned text is evidence to assess, not approval. Use the shell fallback below outside Pi.
 
