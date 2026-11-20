@@ -39,6 +39,15 @@
   const text = button('Text', 'Show the active pane\'s text to read and copy');
   text.onmousedown = event => event.preventDefault();
   controls.append(text);
+  const interrupt = button('Ctrl+C', 'Interrupt the command in the active terminal pane');
+  interrupt.onmousedown = event => event.preventDefault();
+  interrupt.onclick = () => {
+    const term = window.term;
+    if (!term) { note.textContent = 'Wait for the terminal to connect.'; return; }
+    term.input('\x03');
+    note.textContent = 'Sent Ctrl+C to the active pane.';
+  };
+  controls.append(interrupt);
   for (const [label, name, key] of [['Sidebar', 'Show or hide the sessions sidebar', '9001'],
     ['\u2212', 'Narrower sidebar', '9002'], ['+', 'Wider sidebar', '9003'],
     ['Focus', 'Show only the active pane, or every pane again', '9007'],
