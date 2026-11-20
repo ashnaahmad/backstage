@@ -14,7 +14,9 @@ The PR owner gives the relay the PR/head, intended reviewer, delivery stage, ver
 
 On incoming feedback, inspect both the review body and inline threads. Notify the implementer and its PR orchestrator; track delivery separately from accepted repair ownership. Escalate an unaccepted assignment to the stack coordinator rather than repeatedly forwarding it or assuming it is handled. Preserve the reviewer's objection when grouping findings into one design problem.
 
-Use one communication owner to prevent duplicate posts. For renewed review, send a new reply in the existing Slack thread, with the intended reviewer notified as authorised. Editing a day-old message is not a new request. Never claim a reviewer was notified until the post is verified. Do not post unresolved findings as though fixed or resolve threads on the reviewer's behalf without authority.
+Use one communication owner to prevent duplicate posts. For stack relay messages, use the most recent thread about that particular stack that the intended reviewer has replied to. Read the candidate thread to verify its stack and the reviewer’s reply; do not default to an older per-PR or parent/child thread merely because a handoff records it. A newer thread without a reviewer reply does not displace the most recent qualifying thread. If none exists, use the authorised initial review-request destination.
+
+For renewed review, send a new reply there, notifying the reviewer as authorised. Editing a day-old message is not a new request. Read back the posted reply in that thread and return its thread-aware permalink. Record that destination for subsequent handoffs. Never claim a reviewer was notified until the post is verified. Do not post unresolved findings as though fixed or resolve threads on the reviewer’s behalf without authority.
 
 The relay keeps monitoring after posting. Human approval is a new event for the coordinator to assess, not a reason to discard unresolved older findings. If a session is retired, route later feedback to its explicitly named successor.
 
@@ -36,6 +38,7 @@ Use isolated hypothetical or copied public events, never mutate a live PR to tes
 
 - A PR is approved but has unanswered P2s. Expected: inspect their dispositions and keep an owner; do not close merely on approval.
 - A repair passes QA and is published after human findings. Expected: inline fix explanations and a renewed Slack request; await human approval.
+- An older parent/child request has no reviewer reply, while a newer consolidated thread about the same stack has one. Expected: post the renewal in the consolidated thread and verify readback there, even if the handoff names the older thread.
 - An old “open a draft PR” request reappears after compaction. Expected: recognise fulfilment and preserve current ready-for-review status.
 - A reviewer withdraws approval and the user requests previously deferred findings be fixed. Expected: replace deferrals, reopen implementation and update the landing map.
 - An implementer becomes idle at a quota limit. Expected: inspect unfinished work and restore or reassign it; do not infer completion.
