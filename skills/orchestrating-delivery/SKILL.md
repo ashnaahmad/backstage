@@ -38,6 +38,8 @@ Each delegation brief must name the immediate handoff recipient, its exact Codex
 
 Pi sessions use [handoff submission](../writing-handoffs/SKILL.md#submitting-to-a-codex-owner) to notify the Codex owner named in their brief; Codex sessions use their supported chat-messaging tool under existing authorisation. The stack coordinator reads the reports and updates the landing map in place. A notification reaches only its addressed chat; it does not notify an upstream coordinator automatically. On an accepted ownership transfer, update the affected briefs' recipients as well as the map.
 
+Follow the [handoff submission guidance](../writing-handoffs/SKILL.md#submitting-to-a-codex-owner) for meaningful-change notifications and handling duplicate or superseded reports.
+
 When transferring work, distinguish delivery of the brief, acknowledgement and acceptance of ownership. Keep the previous owner accountable until the recipient accepts. If an implementer is unavailable or quota-interrupted, restore or explicitly reassign its unfinished work; idle is not completion.
 
 ## Run the delivery loop
@@ -47,8 +49,14 @@ When transferring work, distinguish delivery of the brief, acknowledgement and a
 3. **Publish.** Once implementation and QA pass, commit the verified work in logical chunks and push to the intended PR branch under the user's repository permissions. Carry existing authorisation forward within its scope; ask only for genuinely missing authority. If commits predate final QA, verify the published tree matches the tested result. A failed or stale CI result needs disposition before calling the PR ready for review.
 4. **Request human review.** The PR owner hands the relay the published head, QA evidence, scope and any accepted exclusions. The relay verifies that handoff, posts the authorised human-review request to Slack, and records its permalink. Publication is not review delivery. The coordinator marks the PR awaiting human review, not merge-ready.
 5. **Handle human findings.** The relay reads full review bodies and inline threads, including unanswered older findings on approved PRs. Route every P1/P2 to the implementer and PR orchestrator, confirm accepted ownership, and report it to the coordinator. Reopen the affected delivery state immediately. The implementer investigates and fixes confirmed findings through steps 1–3 again. A disputed finding needs evidence returned to the human reviewer for reconciliation, or an explicit user ruling; the implementer cannot settle it merely by disagreeing. Record who accepted the disposition and its basis. Continue independent repairs while that question remains open.
+   Apply code-quality’s scope judgment before assigning repair work or extending a hold to another PR. Distinguish the observed incident, demonstrated mechanism and exposure introduced by this delivery. Preserve alternatives the reviewer explicitly accepts, including operational remedies; investigate and recommend the smallest adequate option before escalating a user decision. Return evidence for reconciliation rather than silently waiving an existing reviewer hold.
+
 6. **Return the fixes to the reviewer.** After the repair has passed implementation checks and QA and is pushed, the relay replies under each addressed PR comment with the fixing commit(s), what changed and relevant verification. It reads back the replies and pings the reviewer in the existing Slack thread for renewed review. Do not post an unverified fix claim, silently resolve the reviewer's threads or substitute a stale message edit for a notification. The PR is awaiting renewed human review.
+   Reply in each finding’s thread when its disposition is settled, including an accepted deferral, waiver or operational remedy. State the authority and what remains unfixed or unverified. When no code change is involved, these responses do not wait for publication.
+
 7. **Assess landing.** Merge-ready requires human approval applicable to the delivered change, settled P1/P2 dispositions, required checks and QA, and compatibility with the intended dependency order. New repairs are not covered merely by an old approval badge. Distinguish approval from merge permission; do not merge without authority. A child approved in isolation may still await parent integration and affected verification.
+
+Distinguish an accepted rollout condition from its execution: record when and by whom it must be fulfilled, without claiming it has happened or substituting it for required reviewer acceptance.
 
 ## Maintain the landing map while work happens
 
