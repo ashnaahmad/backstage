@@ -44,6 +44,8 @@ Use isolated hypothetical or copied public events, never mutate a live PR to tes
 - An implementer becomes idle at a quota limit. Expected: inspect unfinished work and restore or reassign it; do not infer completion.
 - Live QA is occupied while another PR has independent tests, builds or review. Expected: proceed without requesting a light-check or compute slot unless an actual shared-resource conflict applies. Conversely, an ordinary test run does not itself block live QA.
 - A restored brief says “all checks wait for root GO”, but that blanket restriction has been superseded. Expected: remove the stale hold from the operational map and briefs and notify affected owners; do not leave them waiting while merely documenting the new rule.
+- A frozen parent awaits CI or human approval. Expected: prepare the child integration and affected checks in parallel, then reconcile actual landed ancestry and perform required final-tip QA; do not hold all child work until parent landing.
+- A clean uptake of approved parent code dismisses the child approval mechanically. Expected: preserve substantive review coverage and request current-head restoration, rather than a blanket new review.
 - A parent changes after a child's QA. Expected: identify the affected integration and verification; distinguish local approval from stack readiness.
 
 A checklist replay demonstrates that the written procedure covers those cases. Claim improved behaviour only after observing agents make the right decisions in a realistic run; compare without the skill when attribution is unclear.
