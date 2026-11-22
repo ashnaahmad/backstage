@@ -1097,7 +1097,11 @@ and Respawn would end Pi; the Windows row keeps it. Ctrl+Q
 adds a sidebar to the writing window, the third panel. A
 document tab click fills the side with the cursor, or puts the
 cursor on the side already showing it; each of two sides has
-its own bar beneath it. Copying and pasting between the sides
+its own bar beneath it, and its own typing mode: moving the
+cursor to the other side (a click or a tab) never carries
+typing there, and coming back to a side left while typing
+resumes typing (where it stopped, unless a click moves the
+cursor). Copying and pasting between the sides
 uses the one clipboard described below: a mouse drag or `y` on
 one side, `p` on the other; each side saves on its own with
 `w`. The document a side leaves keeps its unsaved text, and

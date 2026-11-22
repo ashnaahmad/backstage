@@ -197,6 +197,37 @@ vim.api.nvim_create_autocmd('WinEnter', {
     if doc then vim.schedule(function() pcall(vim.api.nvim_set_current_win, doc) end) end
   end,
 })
+-- Each side of the writing view types or not on its own. Neovim's mode belongs to the whole editor, so
+-- moving the cursor to the other side (a click, a Panels tab, Open on left) would carry typing there,
+-- and keys meant as commands would become text. A side remembers whether it was typing when the cursor
+-- left it and returns to that when the cursor comes back; a new side starts outside typing. The index
+-- window passes the cursor back without counting as a side.
+-- Outside typing the cursor cannot sit after a line's last letter, so typing that stopped at a line's end
+-- resumes there with `startinsert!` while the cursor is still on that line's last letter.
+local function typing() return vim.fn.mode():match('^[iR]') end  -- inserting or replacing
+vim.api.nvim_create_autocmd('WinLeave', {
+  callback = function()
+    local win = vim.api.nvim_get_current_win()
+    if win == help_win then return end
+    vim.w[win].pi_typing = typing() or false
+    local row, col = unpack(vim.api.nvim_win_get_cursor(win))
+    vim.w[win].pi_typing_end = typing() and col > 0 and col == #vim.fn.getline(row) and row or nil
+  end,
+})
+vim.api.nvim_create_autocmd('WinEnter', {
+  callback = function()
+    local win = vim.api.nvim_get_current_win()
+    if win == help_win then return end
+    local was = vim.w[win].pi_typing
+    if typing() and typing() ~= was then
+      vim.cmd.stopinsert()
+    elseif vim.fn.mode() == 'n' and was then
+      local row, col = unpack(vim.api.nvim_win_get_cursor(win))
+      local at_end = row == vim.w[win].pi_typing_end and vim.fn.strchars(vim.fn.getline(row):sub(col + 1)) == 1
+      vim.cmd((was == 'R' and 'startreplace' or 'startinsert') .. (at_end and '!' or ''))
+    end
+  end,
+})
 -- `:q` in the document: the index must not be left as the last window.
 vim.api.nvim_create_autocmd('QuitPre', {
   callback = function()

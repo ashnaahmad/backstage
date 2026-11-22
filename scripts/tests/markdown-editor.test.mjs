@@ -237,6 +237,66 @@ test('writing view: Open on left of the only document changes nothing rather tha
   }
 });
 
+test('writing view: each side keeps its own typing mode; moving to the other side never carries typing there', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'markdown-editor-'));
+  const files = { left: join(dir, 'left.md'), right: join(dir, 'right.md'), third: join(dir, 'third.md') };
+  writeFileSync(files.left, '# Left\n\nleft text\n');
+  writeFileSync(files.right, '# Right\n\nright text é\n');
+  writeFileSync(files.third, '# Third\n');
+  const e = editor(dir, dir, [files.right]);
+  e.tmux('resize-window', '-t', 'e', '-x', '100', '-y', '30');
+  const hex = file => Buffer.from(file).toString('hex');
+  const state = () => e.remote("expand('%:t') .. ' ' .. mode()");
+  const lines = name => JSON.parse(e.remote(`json_encode(getbufline(bufnr('${name}'), 1, '$'))`));
+  const keys = (...k) => e.tmux('send-keys', '-t', 'e', ...k);
+  const click = async (text, side) => {
+    const rows = e.screen().split('\n');
+    const y = rows.findIndex(row => (side === 'left' ? row.split('│')[0] : row.split('│')[1] ?? '').includes(text));
+    assert.ok(y >= 0, `${text} on the ${side}:\n${e.screen()}`);
+    const x = side === 'left' ? rows[y].indexOf(text) + 1 : [...rows[y].slice(0, rows[y].indexOf('│') + 1)].length + rows[y].split('│')[1].indexOf(text) + 1;
+    for (const event of [`0;${x};${y + 1}M`, `0;${x};${y + 1}m`]) { await sleep(200); keys('-l', `\x1b[<${event}`); }
+  };
+  try {
+    await until(() => e.screen().includes('# Right'), 'the editor is up');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(files.left)}', '')`), 'writing');
+    await until(() => e.screen().includes('left text') && e.screen().includes('right text'), 'both sides drawn');
+    keys('G', 'A', ' typed');
+    await until(() => state() === 'left.md i', 'typing on the left');
+
+    await click('right text', 'right');
+    await until(() => state().startsWith('right.md'), 'a click moves to the right');
+    assert.equal(state(), 'right.md n', 'the right side was never typed in, so it is not typing');
+    keys('x');  // a command here, not text
+    await until(() => !lines('right.md').includes('right text'), 'x deletes a letter on the right');
+    assert.equal(lines('right.md').join('\n'), '# Right\n\night text é');
+    keys('u');
+    await until(() => lines('right.md').includes('right text é'), 'undone');
+
+    await click('left text', 'left');
+    await until(() => state() === 'left.md i', 'back on the left, still typing');
+    keys('End', ' more', 'Escape');
+    await until(() => lines('left.md').includes('left text typed more'), `typing continues on the left: ${lines('left.md')}`);
+    await until(() => state() === 'left.md n', 'Esc stops typing');
+
+    // Typing on the right; a Panels tab or Open on left moves the cursor by remote call, and the same rule holds.
+    await click('right text', 'right');
+    await until(() => state() === 'right.md n', 'right, not typing');
+    keys('A');
+    await until(() => state() === 'right.md i', 'typing at the end of the right side\'s line');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpen('${hex(files.left)}', 2)`), 'focused');
+    await until(() => state() === 'left.md n', 'a Panels tab to the left side: as left, not typing');
+    assert.equal(e.remote(`v:lua.PiMarkdownOpen('${hex(files.right)}', 2)`), 'focused');
+    await until(() => state() === 'right.md i', 'and back to the right, typing again');
+    keys('!');
+    await until(() => lines('right.md').includes('right text é!'), `where it stopped, after the line's end: ${lines('right.md')}`);
+    assert.equal(e.remote(`v:lua.PiMarkdownOpenLeft('${hex(files.third)}', '')`), 'writing');
+    await until(() => state() === 'third.md n', 'Open on left: the cursor on the left, not typing');
+  } finally {
+    e.stop();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
 test('writing view: Open on left keeps the right side; copying and pasting between the sides, by mouse and keys, keeps both texts and saves each alone', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'markdown-editor-'));
   const clip = join(dir, 'clip');
