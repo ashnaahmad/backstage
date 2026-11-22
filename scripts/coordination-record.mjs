@@ -553,7 +553,7 @@ async function restoration(record, recordPath, id, session) {
         + `Do not continue that assignment as yours; ask ${accountable} (accountable) what this session should do.` };
   }
   const brief = await briefState(a.brief);
-  const head = [`Assignment ${a.id}: ${a.title} (record rev ${a.rev}).`,
+  const head = [`Assignment ${a.id}: ${a.title} (assignment rev ${a.rev}).`,
     `Accountable: ${accountable}. Implementer: ${implementer}.`];
   if (a.brief) head.push(`Brief: ${a.brief.path} (sha256 ${short(a.brief.sha256)}, recorded ${a.brief.recordedAt}).`);
   const body = {

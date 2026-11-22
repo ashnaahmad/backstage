@@ -568,6 +568,10 @@ and dependencies (`includes`, `awaits-handoff`, `slot-order`,
 `note`), pinned inputs, the current blocker or handoff, and
 evidence. `map` and `handoff` are generated from it, together
 with the checkout's state observed now. Actors are self-reported.
+The implementer is the native Pi session id, which
+[brief restoration](#restoring-the-current-brief) and
+[session snapshots](#session-snapshot) match exactly; the
+accountable owner and checkout writer are actor names.
 The brief stays the authority for requirements; the record holds
 operational fields and evidence references.
 
@@ -576,19 +580,24 @@ operational fields and evidence references.
 export COORDINATION_RECORD=~/agent-briefs/coord.json
 export COORDINATION_ACTOR=orchestrator
 R=scripts/coordination-record.mjs
+# The implementing Pi's session id: for a new session,
+# launch Pi with --session-id "$ID" (see restoring the
+# current brief below); for a running one, use its
+# nativeSessionId from ccmux show --json instead.
+ID=$(uuidgen | tr A-Z a-z)
 $R init
 $R assign feat --title "Feature" \
-  --accountable orchestrator --implementer pi-12 \
+  --accountable orchestrator --implementer "$ID" \
   --brief brief.md
 $R checkout feat --path ../feat-checkout \
-  --cover src --cover test --writer pi-12 \
+  --cover src --cover test --writer feat-impl \
   --expect-rev 1
-COORDINATION_ACTOR=pi-12 $R evidence feat \
+COORDINATION_ACTOR=feat-impl $R evidence feat \
   --check unit --result pass \
   --scope "source-only unit tests" \
   --exclusion "live app" --ref unit.log --capture
 $R inspect E1 --note "read unit.log"
-$R transfer feat --role writer --to pi-14 \
+$R transfer feat --role writer --to feat-impl-2 \
   --expect-rev 2 --note "prepared checkout"
 $R handoff feat
 # Also: show feat [--json], map [--json]
