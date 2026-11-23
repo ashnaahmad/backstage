@@ -436,6 +436,12 @@ To remove the stack, delete its schedules first, then:
 `aws cloudformation delete-stack --stack-name pi-tick-aws`. Task
 records and launcher zips remain under `tick/` in the core bucket.
 
+## Pruning worktree dependencies
+
+Delegated work leaves many worktrees, each holding about 1 GB of `node_modules`. `scripts/prune-worktree-deps.py --repo <main checkout>` reports, and with `--apply` deletes, the `node_modules` directories of worktrees whose HEAD is merged (an ancestor of `origin/main`, or the head of a merged PR), that have no uncommitted or untracked changes, no process running inside and no file changed in the last 24 hours. Sources, branches and worktree registrations stay; `npm ci` restores the dependencies. Worktrees are assessed in parallel and the directories are renamed aside, then removed concurrently.
+
+`scripts/install-prune-worktree-deps.sh <main checkout> [HH:MM]` installs a daily launchd job (default 03:30, log in `~/.local/state/prune-worktree-deps/`); `--remove <main checkout>` uninstalls it.
+
 ## Delegated implementation reminder
 
 Link `pi/prompts/implement.md` from this checkout into
