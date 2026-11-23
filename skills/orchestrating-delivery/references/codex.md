@@ -1,6 +1,6 @@
 # Coordinating from Codex
 
-Read when the coordinator runs in a Codex chat. Delegates are Pi sessions; launch them as in [Pi](pi.md#launching).
+Read when the coordinator runs in a Codex chat, the setup for when the user needs to reach the coordinator from mobile. Only the coordinator runs in Codex: implementers, QA sessions and the relay are always Pi sessions, launched as in [Pi](pi.md#launching), and keep their own guards there.
 
 ## Messaging
 
