@@ -854,10 +854,12 @@ The current command is `requests`; this changes only the
 skill examples, not the browser runtime.
 
 A second tracked patch adds the skill's route for sites behind
-two-factor sign-in, which can fail in the bundled browser:
-attach to the user's signed-in Chrome through Playwright's
-Chrome extension (`attach --extension=chrome`). Apply it after
-the first:
+two-factor or SSO sign-in, which the bundled Chrome for Testing
+cannot complete: attach to the user's signed-in Chrome through
+Playwright's Chrome extension (`attach --extension=chrome`),
+trying `attach` before asking for the extension. It also covers
+bringing the attached tab to the front and typing into code
+editors. Apply it after the first:
 
 ```sh
 patch -p1 -d "$pkg" < \
