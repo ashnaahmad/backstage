@@ -1,15 +1,19 @@
 --- a/skills/playwright-browser/SKILL.md
 +++ b/skills/playwright-browser/SKILL.md
-@@ -110,6 +110,45 @@
+@@ -110,6 +110,49 @@
  node "$SKILL_DIR/scripts/pw.js" state-load "$ARTIFACT_DIR/auth.json"
  ```
  
-+### Sites behind two-factor or SSO sign-in: use the user's Chrome
++### Interactive two-factor or SSO sign-in: attach to the user's Chrome
 +
-+The bundled browser is Chrome for Testing, which cannot complete two-factor
-+sign-in. For a site behind two-factor or single sign-on, go straight to the
-+user's everyday Chrome instead of trying the bundled browser first. Ask the user
-+to sign in there, then attach:
++Prefer the bundled headless browser, with saved auth state where the site has
++it (`state-load`). Attached Chrome runs in front of the user, so it suits
++supervised tasks rather than autonomous QA.
++
++The bundled browser is Chrome for Testing, which cannot complete an interactive
++two-factor or single sign-on step. When a task needs such a sign-in and no saved
++state exists, go straight to the user's everyday Chrome rather than attempting
++it in the bundled browser. Ask the user to sign in there, then attach:
 +
 +```bash
 +node "$SKILL_DIR/scripts/pw.js" attach --extension=chrome

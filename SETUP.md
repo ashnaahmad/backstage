@@ -853,9 +853,10 @@ patch -p1 -d "$pkg" < \
 The current command is `requests`; this changes only the
 skill examples, not the browser runtime.
 
-A second tracked patch adds the skill's route for sites behind
-two-factor or SSO sign-in, which the bundled Chrome for Testing
-cannot complete: attach to the user's signed-in Chrome through
+A second tracked patch adds the skill's route for an interactive
+two-factor or SSO sign-in with no saved state, which the bundled
+Chrome for Testing cannot complete (headless with saved state stays
+the default): attach to the user's signed-in Chrome through
 Playwright's Chrome extension (`attach --extension=chrome`),
 trying `attach` before asking for the extension. It also covers
 bringing the attached tab to the front and typing into code
