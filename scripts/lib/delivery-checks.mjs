@@ -101,6 +101,57 @@ export function mergeClaims(text) {
   return refs;
 }
 
+// ---------------------------------------------------------------- merge commands and the coordinator's reminder
+
+export const LANDING_MAP_REMINDER = 'Landing map check (delivery guard): a message has arrived. If it changes any PR\'s head, stage, next action or '
+  + 'owner, live-QA head or review request, update that PR\'s entry with `coordination-record.mjs pr <id> … --expect-rev <n>`. '
+  + 'Rewrite the entry in place: the landing map holds the current state, not a log, so do not append chronology. '
+  + 'If the message changes nothing in the map, leave it alone.';
+
+const MERGE_FLAGS = new Set(['--squash', '-s', '--merge', '-m', '--rebase', '-r', '--delete-branch', '-d']);
+const MERGE_FORM = 'gh [--repo owner/name] pr merge <number|URL> [--squash|--merge|--rebase] [--delete-branch]';
+
+/**
+ * A merge command in the one form the guard can bind to what it checked, or why it is not in that form. Anything
+ * the shell could reinterpret (quotes, comments, chaining, substitution) or that changes what is merged or when
+ * (--auto, --admin, a custom subject or body) is refused rather than parsed.
+ */
+export function parseMerge(command) {
+  // Detected with quoting removed, so `gh pr "merge"` is caught and then refused by the strict form below.
+  if (!/\bgh\b[\s\S]*\bpr\s+merge\b/.test(command.replace(/["'\\]/g, ''))) return null;
+  const refuse = { error: `run the merge as a single plain command: ${MERGE_FORM}` };
+  if (/[^A-Za-z0-9_./:@=\s-]/.test(command.trim())) return refuse;
+  const tokens = command.trim().split(/\s+/);
+  let i = 0;
+  let repo = null;
+  if (tokens[i++] !== 'gh') return refuse;
+  if (tokens[i] === '-R' || tokens[i] === '--repo') { repo = tokens[i + 1] ?? null; i += 2; if (!repo) return refuse; }
+  if (tokens[i] !== 'pr' || tokens[i + 1] !== 'merge') return refuse;
+  i += 2;
+  let number = null;
+  const flags = [];
+  for (; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '-R' || t === '--repo') {
+      const named = tokens[++i];
+      if (!named) return refuse;
+      if (repo && repo.toLowerCase() !== named.toLowerCase()) return { error: `the merge names both ${repo} and ${named}` };
+      repo = repo ?? named;
+      continue;
+    }
+    const url = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/(\d+)$/.exec(t);
+    if (url && number === null) {
+      if (repo && repo.toLowerCase() !== url[1].toLowerCase()) return { error: `the URL names ${url[1]} but --repo names ${repo}` };
+      repo = url[1]; number = Number(url[2]); continue;
+    }
+    if (/^\d+$/.test(t) && number === null) { number = Number(t); continue; }
+    if (MERGE_FLAGS.has(t)) { flags.push(t); continue; }
+    return refuse;
+  }
+  if (number === null || (repo !== null && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo))) return refuse;
+  return { repo, number, flags };
+}
+
 // ---------------------------------------------------------------- readiness
 
 const PR_QUERY = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){
@@ -323,4 +374,57 @@ export function stallFindings(record, { actor, quiet = [] } = {}) {
       : `${q.assignment}: implementer ${q.session} could not be checked (${q.detail})`);
   }
   return findings;
+}
+
+// ---------------------------------------------------------------- guard decisions shared by the Pi extension and the Codex hook
+
+/** Readiness of one landing-map entry on GitHub now, with the head that was checked. */
+export async function checkEntry(assignment, { fetch = fetchPr } = {}) {
+  const label = `${assignment.pr.repo}#${assignment.pr.number}`;
+  try {
+    const pr = await fetch(assignment.pr.repo, assignment.pr.number);
+    const findings = readinessFindings(assignment, pr);
+    return { head: pr.headRefOid, problem: findings.length ? `${label} is not merge-ready on ${short(pr.headRefOid)}:\n${findings.map(f => `- ${f}`).join('\n')}` : null };
+  } catch (error) {
+    return { head: null, problem: `the merge-readiness check for ${label} could not run (${error.message})` };
+  }
+}
+
+/**
+ * What to do with a shell command, for the merge-readiness guard: null when it is not a merge, { block } with the
+ * reason, or { command } to run instead (the checked PR, bound to the checked head). The entry is resolved once
+ * and the same entry is checked and merged.
+ */
+export async function guardMerge(record, command, options = {}) {
+  const merge = parseMerge(command);
+  if (!merge) return null;
+  const prefix = 'Blocked by the merge-readiness guard: ';
+  if ('error' in merge) return { block: `${prefix}${merge.error}.` };
+  const found = assignmentsFor(record, [{ repo: merge.repo, number: merge.number }]);
+  if (found.length !== 1) {
+    return { block: `${prefix}${found.length ? `#${merge.number} matches several PRs in the landing map; pass --repo` : `${merge.repo ? `${merge.repo}#` : '#'}${merge.number} is not in the landing map`}.` };
+  }
+  const target = found[0];
+  const { head, problem } = await checkEntry(target, options);
+  if (problem) return { block: `${prefix}${problem}\nA PR is merge-ready only with human approval on its current head, every P1/P2 answered, passing required checks and live QA on that head.` };
+  return { command: ['gh', 'pr', 'merge', String(merge.number), '--repo', target.pr.repo, ...merge.flags, '--match-head-commit', head].join(' ') };
+}
+
+/** The correction for a reply that calls mapped PRs merge-ready while the check disagrees, or null. */
+export async function claimCorrection(record, text, options = {}) {
+  const claims = mergeClaims(text);
+  if (!claims.length) return null;
+  const problems = [];
+  for (const a of assignmentsFor(record, claims)) {
+    const { problem } = await checkEntry(a, options);
+    if (problem) problems.push(problem);
+  }
+  if (!problems.length) return null;
+  return `Merge-readiness guard: your reply calls a PR merge-ready, but the check disagrees.\n${problems.join('\n')}\n`
+    + 'Correct the claim to the user and the landing map, and name what remains and who acts next.';
+}
+
+/** The landing map's stalls as a message, or null when there are none. */
+export function stallReport(findings) {
+  return findings.length ? `Landing map stall check (delivery guard):\n${findings.map(f => `- ${f}`).join('\n')}` : null;
 }

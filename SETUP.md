@@ -891,7 +891,34 @@ session; `/delivery off` ends it), or launched with `DELIVERY_ROLE`, `COORDINATI
   A post whose result has no permalink holds further requests for that PR until one is recorded by hand.
 
 Tests (real Pi in RPC mode with a scripted model, fake `gh`, Slack tool and ccmux daemon; temporary home and
-record; no tmux or network): `node --test scripts/tests/delivery-checks.test.mjs scripts/tests/delivery-guards.test.mjs`.
+record; no tmux or network): `node --test scripts/tests/delivery-checks.test.mjs scripts/tests/delivery-guards.test.mjs
+scripts/tests/codex-delivery-hook.test.mjs`.
+
+**Codex coordinator** ([codex-delivery-hook.mjs](scripts/codex-delivery-hook.mjs)). Only the coordinator ever runs
+in Codex (for reaching it from mobile); implementers, QA and the relay stay in Pi with the guards above. The hook is
+active only in a Codex session enrolled in the [stop gate](#codex-stop-gate) (`enroll --as <actor> --record
+<file>`), which names the record and actor:
+
+- `UserPromptSubmit`: the landing-map reminder as context, for your messages and delegates' handoffs. Stop-gate
+  continuations do not trigger it.
+- `PreToolUse` (Bash): the same `gh pr merge` guard, denying or rewriting the command to the checked PR and head.
+- `PostToolUse`: when the record has changed since the session last looked (baseline: its first message after
+  enrolling), the landing map's stalls as context. Quiet delegates are the stop gate's job.
+- `Stop`: once per turn, a continuation when the reply calls a mapped PR merge-ready and the check disagrees.
+
+There is no blocking-wait guard in Codex: the stop gate's own bounded wait is how a Codex coordinator waits. Errors
+let Codex continue, with a visible message. Verified on Codex 0.160.1 with `codex exec` in a temporary Codex home:
+each event fires, context reaches the model, a Bash command can be rewritten or denied, and a Stop continuation does
+not fire `UserPromptSubmit`. Install alongside the stop gate in `$CODEX_HOME/hooks.json`, with absolute paths, then
+trust it in `/hooks`:
+
+```json
+"UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/path/to/node <harness>/scripts/codex-delivery-hook.mjs", "timeout": 30 }] }],
+"PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "/path/to/node <harness>/scripts/codex-delivery-hook.mjs", "timeout": 30 }] }],
+"PostToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "/path/to/node <harness>/scripts/codex-delivery-hook.mjs", "timeout": 30 }] }]
+```
+
+and add the same command as a second handler under the existing `Stop` entry.
 
 ## Terminal session sidebar and browser QA
 

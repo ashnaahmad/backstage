@@ -11,3 +11,7 @@ Read when the coordinator runs in a Codex chat, the setup for when the user need
 ## Staying accountable
 
 Codex has no between-turn message delivery, so a coordinator accountable for delegated work can opt in to the [Codex stop gate](../../../SETUP.md#codex-stop-gate): `enroll --as <actor>`, then `watch <assignment> --since <send time>` after each send, and record an outcome (`settle`, `block`, `schedule`) once the reply is read. Read the brief from the [coordination record](../../../SETUP.md#coordination-record) at the same transitions a Pi delegate would restore it.
+
+## Guards
+
+Enrolling in the stop gate also turns on the [Codex delivery hook](../../../SETUP.md#delivery-guards): a landing-map reminder with each incoming message, a stall check after record changes, the merge-readiness guard on `gh pr merge`, and a continuation when a reply calls a PR merge-ready that is not.

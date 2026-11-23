@@ -3,7 +3,8 @@ import { stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalRecordPath, readRecord } from '../../scripts/lib/record-store.mjs';
-import { assignmentsFor, blockingWaitReason, fetchPr, mergeClaims, quietDelegates, readinessFindings, relayPostCheck, sameCommit, slackPermalink, stallFindings } from '../../scripts/lib/delivery-checks.mjs';
+import { blockingWaitReason, claimCorrection, fetchPr, guardMerge, LANDING_MAP_REMINDER as REMINDER, parseMerge, quietDelegates, relayPostCheck, sameCommit,
+  slackPermalink, stallFindings, stallReport } from '../../scripts/lib/delivery-checks.mjs';
 import { daemonSessions } from '../../scripts/session-snapshot.mjs';
 
 /**
@@ -31,61 +32,12 @@ const NODE = /^node(\.exe)?$/.test(basename(process.execPath)) ? process.execPat
 const SLACK_POST = /^mcp__slack[^_]*__slack_(send|schedule)_message$/;
 const IDLE_CHECK_MS = Number(process.env.DELIVERY_IDLE_CHECK_SECONDS ?? 300) * 1000;
 
-const REMINDER = 'Landing map check (delivery guard): a message has arrived. If it changes any PR\'s head, stage, next action or '
-  + 'owner, live-QA head or review request, update that PR\'s entry with `coordination-record.mjs pr <id> … --expect-rev <n>`. '
-  + 'Rewrite the entry in place: the landing map holds the current state, not a log, so do not append chronology. '
-  + 'If the message changes nothing in the map, leave it alone.';
-
 type Role = { role: 'coordinator' | 'relay'; record: string; actor: string };
 type Checked = { id: string; repo: string; number: number; head: string | null; thread: string | null };
 
 const textOf = (content: unknown) => Array.isArray(content)
   ? content.map(block => (block && typeof block === 'object' && 'text' in block ? String((block as { text: unknown }).text) : '')).join('\n')
   : typeof content === 'string' ? content : '';
-
-const MERGE_FLAGS = new Set(['--squash', '-s', '--merge', '-m', '--rebase', '-r', '--delete-branch', '-d']);
-const MERGE_FORM = 'gh [--repo owner/name] pr merge <number|URL> [--squash|--merge|--rebase] [--delete-branch]';
-
-/**
- * A merge command in the one form the guard can bind to what it checked, or why it is not in that form. Anything
- * the shell could reinterpret (quotes, comments, chaining, substitution) or that changes what is merged or when
- * (--auto, --admin, a custom subject or body) is refused rather than parsed.
- */
-export function parseMerge(command: string): { repo: string | null; number: number; flags: string[] } | { error: string } | null {
-  // Detected with quoting removed, so `gh pr "merge"` is caught and then refused by the strict form below.
-  if (!/\bgh\b[\s\S]*\bpr\s+merge\b/.test(command.replace(/["'\\]/g, ''))) return null;
-  const refuse = { error: `run the merge as a single plain command: ${MERGE_FORM}` };
-  if (/[^A-Za-z0-9_./:@=\s-]/.test(command.trim())) return refuse;
-  const tokens = command.trim().split(/\s+/);
-  let i = 0;
-  let repo: string | null = null;
-  if (tokens[i++] !== 'gh') return refuse;
-  if (tokens[i] === '-R' || tokens[i] === '--repo') { repo = tokens[i + 1] ?? null; i += 2; if (!repo) return refuse; }
-  if (tokens[i] !== 'pr' || tokens[i + 1] !== 'merge') return refuse;
-  i += 2;
-  let number: number | null = null;
-  const flags: string[] = [];
-  for (; i < tokens.length; i++) {
-    const t = tokens[i];
-    if (t === '-R' || t === '--repo') {
-      const named = tokens[++i];
-      if (!named) return refuse;
-      if (repo && repo.toLowerCase() !== named.toLowerCase()) return { error: `the merge names both ${repo} and ${named}` };
-      repo = repo ?? named;
-      continue;
-    }
-    const url = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/(\d+)$/.exec(t);
-    if (url && number === null) {
-      if (repo && repo.toLowerCase() !== url[1].toLowerCase()) return { error: `the URL names ${url[1]} but --repo names ${repo}` };
-      repo = url[1]; number = Number(url[2]); continue;
-    }
-    if (/^\d+$/.test(t) && number === null) { number = Number(t); continue; }
-    if (MERGE_FLAGS.has(t)) { flags.push(t); continue; }
-    return refuse;
-  }
-  if (number === null || (repo !== null && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo))) return refuse;
-  return { repo, number, flags };
-}
 
 export default function deliveryGuards(pi: ExtensionAPI) {
   let role: Role | undefined;
@@ -221,19 +173,6 @@ export default function deliveryGuards(pi: ExtensionAPI) {
     return { messages: [...messages.slice(0, index + 1), reminder, ...messages.slice(index + 1)] as never };
   });
 
-  const checkEntry = async (assignment: { pr: { repo: string; number: number } }) => {
-    const label = `${assignment.pr.repo}#${assignment.pr.number}`;
-    try {
-      const pr = await fetchPr(assignment.pr.repo, assignment.pr.number);
-      const findings = readinessFindings(assignment as never, pr);
-      return { head: pr.headRefOid as string, problem: findings.length ? `${label} is not merge-ready on ${pr.headRefOid.slice(0, 12)}:\n${findings.map(f => `- ${f}`).join('\n')}` : null };
-    } catch (error) {
-      return { head: null, problem: `the merge-readiness check for ${label} could not run (${(error as Error).message})` };
-    }
-  };
-
-
-
   pi.on('tool_call', async (event, ctx) => {
     latest = ctx;
     if (!role) return;
@@ -246,24 +185,14 @@ export default function deliveryGuards(pi: ExtensionAPI) {
           + 'wait, and `command` with `every` to check a condition (for example `gh pr checks <n>` or `ccmux show --json`).' };
       }
     }
-    if (event.toolName === 'bash' && typeof event.input.command === 'string' && role.role === 'coordinator') {
-      const merge = parseMerge(event.input.command);
-      if (!merge) return;
-      if ('error' in merge) return { block: true, reason: `Blocked by the merge-readiness guard: ${merge.error}.` };
-      let target;
-      try {
-        const found = assignmentsFor(await load(), [{ repo: merge.repo, number: merge.number }]);
-        if (found.length !== 1) return { block: true, reason: `Blocked by the merge-readiness guard: ${found.length ? `#${merge.number} matches several PRs in the landing map; pass --repo` : `${merge.repo ? `${merge.repo}#` : '#'}${merge.number} is not in the landing map`}.` };
-        target = found[0];
-      } catch (error) {
+    if (event.toolName === 'bash' && typeof event.input.command === 'string' && role.role === 'coordinator' && parseMerge(event.input.command)) {
+      let decision;
+      try { decision = await guardMerge(await load(), event.input.command); } catch (error) {
         return { block: true, reason: `Blocked by the merge-readiness guard: the coordination record could not be read (${(error as Error).message}).` };
       }
-      // The PR checked is the PR merged: the same entry is used for both, never looked up again.
-      merge.repo = target.pr.repo;
-      const { head, problem } = await checkEntry(target);
-      if (problem) return { block: true, reason: `Blocked by the merge-readiness guard: ${problem}\nA PR is merge-ready only with human approval on its current head, every P1/P2 answered, passing required checks and live QA on that head.` };
-      // Run exactly what was checked: this PR in this repo, refused by GitHub if its head has moved since.
-      event.input.command = ['gh', 'pr', 'merge', String(merge.number), '--repo', merge.repo!, ...merge.flags, '--match-head-commit', head!].join(' ');
+      if (!decision) return;
+      if ('block' in decision) return { block: true, reason: decision.block };
+      event.input.command = decision.command;
       return;
     }
     if (SLACK_POST.test(event.toolName)) {
@@ -314,7 +243,7 @@ export default function deliveryGuards(pi: ExtensionAPI) {
     try {
       const record = await load();
       const findings = stallFindings(record, { actor: role!.actor, quiet: await quietDelegates(record, { actor: role!.actor, owners: await owners(ctx) }) });
-      return findings.length ? `Landing map stall check (delivery guard):\n${findings.map(f => `- ${f}`).join('\n')}` : null;
+      return stallReport(findings);
     } catch (error) {
       return `Landing map stall check could not run: ${(error as Error).message}`;
     }
@@ -370,21 +299,13 @@ export default function deliveryGuards(pi: ExtensionAPI) {
   pi.on('agent_before_settle', async (event, ctx) => {
     latest = ctx;
     if (role?.role !== 'coordinator' || !lastAssistant || corrected) return;
-    const claims = mergeClaims(lastAssistant.text);
-    if (!claims.length) return;
-    let record;
-    try { record = await load(); } catch { return; }
-    const problems = [];
-    for (const a of assignmentsFor(record, claims)) {
-      const { problem } = await checkEntry(a);
-      if (problem) problems.push(problem);
-    }
-    if (!problems.length) return;
+    let correction;
+    try { correction = await claimCorrection(await load(), lastAssistant.text); } catch { return; }
+    if (!correction) return;
     corrected = true;
     return {
       entries: [...event.entries, { type: 'custom_message', customType: 'delivery-merge-claim', display: true,
-        content: `Merge-readiness guard: your reply calls a PR merge-ready, but the check disagrees.\n${problems.join('\n')}\n`
-          + 'Correct the claim to the user and the landing map, and name what remains and who acts next.' }],
+        content: correction }],
       continue: true,
     };
   });
