@@ -32,13 +32,19 @@ export default function codeQuality(pi: ExtensionAPI) {
       ? ` (partial: ${reported}/${messages} responses${unreported ? `; ${unreported} review(s) unreported` : ""})`
       : " (reported)");
   };
+  /** The user turned the widget off with /quality; progress is still tracked and shown again when they turn it on. */
+  let hidden = false;
+  const widgetLines = () => {
+    const lines = summary ? [`Quality: ${summary}`] : [];
+    if (reviews.length) lines.push(`Reviews: ${reviews.length} · ${duration(reviews.reduce((n, r) => n + elapsed(r), 0))} · ${usage(reviews)}`);
+    return lines;
+  };
   const render = (ctx: { ui: {
     setStatus(key: string, value: string | undefined): void;
     setWidget(key: string, content: string[] | undefined): void;
   } }) => {
-    const lines = summary ? [`Quality: ${summary}`] : [];
-    if (reviews.length) lines.push(`Reviews: ${reviews.length} · ${duration(reviews.reduce((n, r) => n + elapsed(r), 0))} · ${usage(reviews)}`);
-    ctx.ui.setWidget("quality", lines.length ? lines : undefined);
+    const lines = widgetLines();
+    ctx.ui.setWidget("quality", lines.length && !hidden ? lines : undefined);
     // Keep progress in one place; clear footer entries left by an older runtime.
     ctx.ui.setStatus("quality", undefined);
     ctx.ui.setStatus("quality-reviews", undefined);
@@ -152,13 +158,20 @@ Report findings with inspected paths/lines or probes, distinguish fresh checks f
   });
 
   pi.registerCommand("quality", {
-    description: "Show quality details, or clear the automatic progress widget",
+    description: "Hide the quality widget if it is showing; otherwise show it with details. /quality clear clears it until the next update",
     handler: async (args, ctx) => {
       if (args.trim() === "clear") {
         summary = "";
+        hidden = false;
         ctx.ui.setStatus("quality", undefined);
         ctx.ui.setWidget("quality", undefined);
+      } else if (!hidden && widgetLines().length) {
+        hidden = true;
+        render(ctx);
+        ctx.ui.notify("Quality widget hidden; run /quality to show it again.", "info");
       } else {
+        hidden = false;
+        render(ctx);
         const lines = [summary || "No quality progress reported in this session."];
         if (reviews.length) {
           lines.push("Review usage since session load (not billed cost):");

@@ -30,7 +30,7 @@ Clone this repository, then follow [SETUP.md](SETUP.md). Setup is explicit: inst
 | `✎ Write` (Panels row) | Writing view: Pi's editor fills the screen as it is while Pi keeps running unseen; right-click a document tab for `Open on left` to add a second document beside it; a document tab fills the side with the cursor; `π Show agent` returns, keeping the right side's document. See [setup](SETUP.md#terminal-session-sidebar-and-browser-qa) |
 | Ctrl+Q | Hide or restore the session sidebar |
 | Editor `i`, Esc, `w`, `q` | Type, stop typing, save, close |
-| `/quality` | Inspect quality progress and review results |
+| `/quality` | Hide the quality widget while it is showing; otherwise show it with progress and review details |
 | `submit_handoff` tool | A delegated session submits its finished Markdown handoff, with its QA state, to the Codex owner thread named in its brief; Codex queues the notification. See [handoff submission](SETUP.md#handoff-submission); tests: `node --test scripts/tests/handoff.test.mjs` |
 | `/readfiles` | Browse files using Files Widget |
 | `/studio file.md` | Open Pi Studio's browser writing surface |

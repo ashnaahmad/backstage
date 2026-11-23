@@ -38,6 +38,16 @@ test('no-implementation evidence survives tool results and UI, and later progres
   assert.equal(widgets.get('quality'), undefined);
   await tool.execute('three', {summary:'Checking next change'}, undefined, undefined, ctx);
   assert.deepEqual(widgets.get('quality'), ['Quality: Checking next change']);
+  const notices = [];
+  ctx.ui.notify = text => notices.push(text);
+  await loaded.extensions[0].commands.get('quality').handler('', ctx);
+  assert.equal(widgets.get('quality'), undefined, '/quality hides a showing widget');
+  assert.match(notices.at(-1), /hidden; run \/quality to show it again/);
+  await tool.execute('four', { summary: 'Still working' }, undefined, undefined, ctx);
+  assert.equal(widgets.get('quality'), undefined, 'later progress does not undo the hide');
+  await loaded.extensions[0].commands.get('quality').handler('', ctx);
+  assert.deepEqual(widgets.get('quality'), ['Quality: Still working'], '/quality again shows the current progress');
+  assert.match(notices.at(-1), /^Still working/, 'showing it also prints the details');
   await loaded.extensions[0].handlers.get('session_start')[0]({}, ctx);
   assert.equal(widgets.get('quality'), undefined);
 });
@@ -80,6 +90,8 @@ test('reviews show in the widget and /quality with usage; failures stay visible;
     setStatus() {}, setWidget: (key, value) => widgets.set(key, value), notify: text => { notice = text; } } };
   const reviewLine = () => (widgets.get('quality') ?? []).find(line => line.startsWith('Reviews:')) ?? '';
   const quality = extension.commands.get('quality');
+  // /quality hides a showing widget; the next /quality shows it with the details.
+  const details = async () => { if (widgets.get('quality')) await quality.handler('', ctx); await quality.handler('', ctx); };
   const reviewer = extension.tools.get('quality_review').definition;
   const fake = mkdtempSync(join(tmpdir(), 'quality-ui-'));
   const previousPath = process.env.PATH;
@@ -99,12 +111,12 @@ test('reviews show in the widget and /quality with usage; failures stay visible;
     assert.match(reply.content.map(part => part.text).join('\n'), /Review call id: usage \(cite it as reviewCallId in quality_status\)/,
       'the review result shows the id a reviewDisposition cites');
     assert.match(reviewLine(), /8 out/);
-    await quality.handler('', ctx);
+    await details();
     assert.match(notice, /returned; .*14 input, 8 output, 10 cache-read, 1 cache-write/);
 
     fakePi('process.exitCode=1;');
     await assert.rejects(reviewer.execute('failure', { brief: 'Review fixture' }, undefined, undefined, ctx));
-    await quality.handler('', ctx);
+    await details();
     assert.match(notice, /failed; .*tokens unavailable/, 'a failed review stays visible');
 
     fakePi(`process.stdin.resume();\n${message('toolUse', '', '{input:1,output:2,cacheRead:0,cacheWrite:0}')}\nsetTimeout(()=>{},60000);`);
@@ -114,12 +126,12 @@ test('reviews show in the widget and /quality with usage; failures stay visible;
     for (let i = 0; i < 40 && !/2 out/.test(reviewLine()); i++) await new Promise(done => setTimeout(done, 25));
     controller.abort();
     await rejection;
-    await quality.handler('', ctx);
+    await details();
     assert.match(notice, /cancelled; .*1 input, 2 output/, 'a cancelled review keeps its partial usage');
 
     for (const handler of extension.handlers.get('session_start')) await handler({}, ctx);
     assert.equal(widgets.get('quality'), undefined);
-    await quality.handler('', ctx);
+    await details();
     assert.doesNotMatch(notice, /Review usage/, 'a new session starts without earlier reviews');
   } finally {
     process.env.PATH = previousPath;
