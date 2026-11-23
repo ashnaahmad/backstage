@@ -1509,3 +1509,33 @@ The page had title Example Domain and no h1; the agent
 reported that accurately. Browser windows remain separate
 from the terminal. Mouse switching has not been visually
 verified in an attached user terminal.
+
+### Optional Google subscription provider
+
+`pi-antigravity@0.15.0` adds Google-account OAuth to Pi. It is an unofficial integration: [Google's terms](https://antigravity.google/terms) prohibit third-party access to consumer Antigravity OAuth, and the [package](https://github.com/Rahularya01/pi-antigravity) reports account suspensions. It is optional, not part of the default installation. The supported subscription client is Google's Antigravity CLI.
+
+For an explicitly chosen installation:
+
+```sh
+pi install npm:pi-antigravity@0.15.0
+```
+
+In personal `~/.pi/agent/settings.json`, narrow that package entry to its provider resource and disable credit overages, preserving other settings:
+
+```json
+{
+  "packages": [
+    {
+      "source": "npm:pi-antigravity@0.15.0",
+      "extensions": ["src/index.ts"]
+    }
+  ],
+  "useG1Credits": false
+}
+```
+
+Merge this example; do not replace the existing packages array. Provider-only loading avoids adding the package's search, reader and image tools to every session. `ANTIGRAVITY_USE_CREDITS=0` also forces overages off and takes precedence over settings.
+
+Start a new Pi session or `/reload`, then run `/login antigravity`. Sign in with the subscribed Google account. On mobile or a remote browser, paste the full localhost callback URL into Pi's login prompt if the browser cannot reach the listener. Never paste callback URLs or credentials into shared transcripts or Git.
+
+After login, use `/antigravity.models` and `/antigravity.usage` to verify account entitlements and quota, then choose Neon with `/model`. Add `antigravity/gemini-4-neon` to `enabledModels` if desired; project settings may override the personal cycling list. The live catalog, not installation alone, establishes model availability. Keep Pi's `auth.json` and `antigravity-accounts.json` private. Installation and provider loading have been checked; an authenticated Neon reply remains to be verified.
