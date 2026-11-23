@@ -78,7 +78,7 @@ Fable 5.2 defaults to low thinking through `modelThinkingLevels` in [.pi/setting
 
 Install Chrome or another renderer-supported Chromium browser for image previews. PDF/LaTeX and Studio's optional Quarto/REPL dependencies are outside the current setup. Restart Pi or `/reload`; accept project trust only after reviewing the checkout.
 
-In `~/.pi/agent/settings.json`, preserve unrelated settings and add the absolute paths of this checkout's `pi/extensions/code-quality.ts`, `pi/extensions/quality-feedback.ts`, `pi/extensions/diff-pane.ts`, `pi/extensions/idle-exit.ts`, `pi/extensions/wait.ts`, `pi/extensions/task-brief.ts` and `pi/extensions/handoff.ts` to `extensions`, and the directory `skills` to `skills`. Copy the `defaultProvider`, `defaultModel`, `enabledModels` and `modelThinkingLevels` values from [.pi/settings.json](.pi/settings.json). Merge [.pi/claude-bridge.json](.pi/claude-bridge.json) into the global file of the same name. Recompute these paths after moving the checkout. `pi/extensions/` and `skills/` are deliberately not directories Pi discovers on its own: the harness loads once, from this main checkout, in every directory, including other worktrees of this branch (see [testing in a worktree](#testing-harness-changes-in-a-worktree)). Its local npm pins match the global ones.
+In `~/.pi/agent/settings.json`, preserve unrelated settings and add the absolute paths of this checkout's `pi/extensions/code-quality.ts`, `pi/extensions/quality-feedback.ts`, `pi/extensions/diff-pane.ts`, `pi/extensions/idle-exit.ts`, `pi/extensions/wait.ts`, `pi/extensions/task-brief.ts`, `pi/extensions/handoff.ts` and `pi/extensions/delivery-guards.ts` to `extensions`, and the directory `skills` to `skills`. Copy the `defaultProvider`, `defaultModel`, `enabledModels` and `modelThinkingLevels` values from [.pi/settings.json](.pi/settings.json). Merge [.pi/claude-bridge.json](.pi/claude-bridge.json) into the global file of the same name. Recompute these paths after moving the checkout. `pi/extensions/` and `skills/` are deliberately not directories Pi discovers on its own: the harness loads once, from this main checkout, in every directory, including other worktrees of this branch (see [testing in a worktree](#testing-harness-changes-in-a-worktree)). Its local npm pins match the global ones.
 
 If migrating an existing agent setup, reconcile its quality hooks and skills with this bundle so the same guidance does not load twice. Back up settings before removing registrations.
 
@@ -251,6 +251,7 @@ pi -ne -ns -np \
   -e pi/extensions/wait.ts \
   -e pi/extensions/task-brief.ts \
   -e pi/extensions/handoff.ts \
+  -e pi/extensions/delivery-guards.ts \
   --skill skills --prompt-template pi/prompts
 ```
 
@@ -829,6 +830,68 @@ CLI whose model access matches the sessions you use.
 
 Rollback: remove the two hook entries (or withdraw sessions with
 `withdraw`); delete the state directory if no longer wanted.
+
+## Delivery guards
+
+Deterministic checks for the [orchestrating-delivery](skills/orchestrating-delivery/SKILL.md) loop, in one Pi
+extension, [delivery-guards.ts](pi/extensions/delivery-guards.ts). The checks live in `scripts/lib/delivery-checks.mjs`; `scripts/delivery-check.mjs` runs them from the
+shell (`stalls`, `quiet`, `readiness <assignment|owner/name#n|#n>`, `wait-check <command>`), read-only.
+
+**Blocking waits** (coordinator and relay): a bash call that
+sleeps over 5 seconds, loops around a sleep, or watches (`gh run watch`, `gh pr checks --watch`, `watch`,
+`tail -f`) is blocked with a pointer to the `wait` tool, because messages arrive only between tool calls. Only
+words in command position count (`echo sleep 30` passes); quoted text and heredoc bodies are ignored. It is a
+pattern check, not a shell parser.
+
+**Landing map.** The coordination record is the landing map: `pr <id>` sets an assignment's PR (repo and number,
+case-insensitive and unique across assignments), head, stage, next action with its owner, live-QA head and review
+request (a Slack permalink with its thread), each value replacing the last. A new PR identity drops the previous
+PR's facts. `map` shows a landing-map table that marks QA or a request on an earlier head. `--stage merge-ready`,
+and a change of head or QA on an entry that is merge-ready, are refused unless the readiness check below passes on
+the proposed entry; it is run outside the record lock and the write is refused if the entry changed meanwhile.
+
+**Readiness** (`gh api graphql`): human approval on the current head (bots excluded), no changes requested, no
+unresolved review thread whose reviewer wrote the last comment (P3/nit excepted), required checks passing (the
+aggregate state when no check is marked required), not behind its base or conflicting, and live QA recorded on the
+head. More than 100 reviews, threads or checks is reported as not fully checked. Whether a reply fixed a finding,
+findings outside review threads, and a PR description's accuracy are not established.
+
+**Coordinator and relay:** the guards are active only in a session
+declared with `/delivery coordinator <record> <actor>` or `/delivery relay <record> <actor>` (remembered in the
+session; `/delivery off` ends it), or launched with `DELIVERY_ROLE`, `COORDINATION_RECORD` and
+`COORDINATION_ACTOR`. A coordinator's actor is the record's accountable owner.
+
+- A coordinator's model request that answers an incoming message (typed, `ccmux send`, steered mid-run or an
+  announcement below) carries a reminder right after it to check whether the landing map should change and to
+  rewrite entries in place rather than append. It is added per request and not stored; tool-only continuations do
+  not repeat it.
+- When the record has changed (by any writer), the coordinator's next tool result carries the landing map's stalls:
+  an open PR (any stage but landed or parked) with no stage or no next action and owner, awaiting review without a
+  request or with one on an earlier head, awaiting review or merge-ready without live QA on the head, and quiet
+  implementers.
+- Every 5 minutes (`DELIVERY_IDLE_CHECK_SECONDS`), implementers of the coordinator's open PRs are checked through
+  the ccmux daemon. One that is idle with no report since its latest instruction (on its transcript's persisted
+  path) is announced once per instruction, as a user message, which also ends a running `wait`. A report is a
+  `ccmux send` whose result names this session (ccmux id, pane or Pi session id), or a queued `submit_handoff`.
+  Sessions ccmux cannot see, whose transcript belongs to another session, or with no instruction found are
+  reported as not checked rather than quiet. Entries too large to parse are followed by their envelope.
+- `gh pr merge` runs only in one plain form, `gh [--repo owner/name] pr merge <number|URL> [--squash|--merge|--rebase]
+  [--delete-branch]`, naming a PR in the map that passes the readiness check. It is rewritten to exactly
+  `gh pr merge <n> --repo <repo> [flags] --match-head-commit <checked head>`, so a later push makes GitHub refuse
+  it. Quotes, comments, chaining, `--auto`, `--admin` and custom subjects are refused rather than parsed. A reply that calls
+  a mapped PR merge-ready (questions, conditional, future and negated clauses excepted) while the check disagrees is
+  followed by one correction per incoming message. The reply itself has already been shown; this corrects it.
+- A Slack post (`mcp__slack__slack_send_message` or `…_schedule_message`) that asks for review and names a PR in
+  the map, or asks for review in a recorded request's thread (naming the PR when the thread holds several), is a
+  review request. A coordinator's is refused: the relay owns review requests. The relay's needs live QA on the
+  PR's head and that head published on GitHub. A PR already requested gets a new post only as a reply in the
+  recorded thread and channel, and only after its head has changed (any new commit dismisses approval, so any
+  change of SHA counts). One request per PR
+  is in flight at a time; after the post, its permalink and thread are recorded with the head that was checked.
+  A post whose result has no permalink holds further requests for that PR until one is recorded by hand.
+
+Tests (real Pi in RPC mode with a scripted model, fake `gh`, Slack tool and ccmux daemon; temporary home and
+record; no tmux or network): `node --test scripts/tests/delivery-checks.test.mjs scripts/tests/delivery-guards.test.mjs`.
 
 ## Terminal session sidebar and browser QA
 

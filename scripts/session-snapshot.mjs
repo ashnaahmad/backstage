@@ -399,7 +399,7 @@ export function daemonUrl(env = process.env) {
 }
 
 /** Sessions from the running daemon. Unlike `ccmux show`, this never starts or replaces the daemon. */
-async function daemonSessions() {
+export async function daemonSessions() {
   const url = `${daemonUrl()}/sessions`;
   let response;
   try {

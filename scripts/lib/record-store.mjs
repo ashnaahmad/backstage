@@ -69,9 +69,24 @@ function assignmentProblem(a, record) {
   if (!Array.isArray(a.dependencies) || !a.dependencies.every(d => isObject(d) && isText(d.on) && DEPENDENCY_KINDS.includes(d.kind))) return 'dependencies';
   if (!Array.isArray(a.inputs) || !a.inputs.every(i => isObject(i) && isText(i.label)
     && (isRef(i.receipt) || (isText(i.repo) && /^[0-9a-f]{40,64}$/.test(i.commit ?? ''))))) return 'inputs';
+  if (a.pr !== undefined && a.pr !== null && prProblem(a.pr)) return 'pr';
   if (!Array.isArray(a.history) || !a.history.length || !a.history.every(h => isObject(h) && Number.isSafeInteger(h.rev) && isText(h.by) && isText(h.change))
     || a.history.at(-1).rev !== a.rev) return 'history';
   return null;
+}
+
+const PR_STAGES = ['implementing', 'qa', 'evals', 'publishing', 'awaiting-review', 'repairing', 'merge-ready', 'landed', 'parked'];
+
+function prProblem(pr) {
+  if (!isObject(pr) || !isText(pr.repo) || !Number.isSafeInteger(pr.number)) return true;
+  if (pr.head !== null && !isText(pr.head)) return true;
+  if (pr.stage !== null && !PR_STAGES.includes(pr.stage)) return true;
+  if (pr.next !== null && (!isObject(pr.next) || !isText(pr.next.action) || !isText(pr.next.owner))) return true;
+  if (pr.qa !== null && (!isObject(pr.qa) || !isText(pr.qa.head) || (pr.qa.ref !== null && !isRef(pr.qa.ref)))) return true;
+  if (pr.reviewRequest !== null && (!isObject(pr.reviewRequest) || !/^https:\/\/[A-Za-z0-9.-]*slack\.com\/archives\//.test(pr.reviewRequest.permalink ?? '')
+    || !/^\d+\.\d+$/.test(pr.reviewRequest.thread ?? '') || !isText(pr.reviewRequest.head))) return true;
+  if (pr.repo !== pr.repo.toLowerCase()) return true;
+  return false;
 }
 
 function subjectProblem(s) {

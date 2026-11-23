@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { captureSource, compareCaptures, CaptureError } from './lib/source-identity.mjs';
 import { canonicalRecordPath, readRecord, RecordError, unlock, updateRecord } from './lib/record-store.mjs';
+import { fetchPr, readinessFindings, slackPermalink } from './lib/delivery-checks.mjs';
 
 const USAGE = `usage: coordination-record.mjs <command> [options]   (--record <file>, --as <actor> or env)
 
@@ -26,6 +27,12 @@ const USAGE = `usage: coordination-record.mjs <command> [options]   (--record <f
   undepend <id> --on <id|label> --kind <kind> --expect-rev <n>
   pin <id> --label <l> (--repo <dir> --commit <rev> [--track <ref>] | --receipt <file>) [--note <text>] --expect-rev <n>
   unpin <id> --label <l> --expect-rev <n>
+  pr <id> --expect-rev <n> [--repo <owner/name> --number <n>] [--head <sha>] [--stage <stage>]
+                [--next <text> --next-owner <name> | --clear-next] [--qa-head <sha> [--qa-ref <file>]]
+                [--review-request <permalink> --thread <ts> --request-head <sha>]
+                the assignment's PR in the landing map; each value replaces the previous one (no history kept here).
+                --stage merge-ready is refused unless GitHub shows the PR ready on its head (see delivery-check.mjs).
+                Stages: implementing, qa, evals, publishing, awaiting-review, repairing, merge-ready, landed, parked
   evidence <id> --check <name> --result <word> --scope <text> [--env <text>] [--exclusion <text>]... [--ref <file>]...
                 (--capture | --receipt <file> [--stated-identity <text>] | --subject-unknown)
   inspect <evidence-id> [--note <text>]
@@ -42,7 +49,10 @@ const ROLES = { accountable: 'accountable', implementer: 'implementer', writer: 
 const KINDS = ['includes', 'awaits-handoff', 'slot-order', 'note'];
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const REPEATABLE = new Set(['cover', 'exclusion', 'ref']);
-const FLAGS = new Set(['capture', 'subject-unknown', 'json', 'no-parent', 'clear-status']);
+const FLAGS = new Set(['capture', 'subject-unknown', 'json', 'no-parent', 'clear-status', 'clear-next']);
+export const STAGES = ['implementing', 'qa', 'evals', 'publishing', 'awaiting-review', 'repairing', 'merge-ready', 'landed', 'parked'];
+const SHA = /^[0-9a-f]{7,64}$/;
+const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 class UsageError extends Error {}
 
@@ -172,6 +182,71 @@ async function resolveCommit(repo, rev) {
   } catch { return null; }
 }
 
+// ---------------------------------------------------------------- landing-map entries
+
+/**
+ * The PR entry an assignment would have after `pr` with these options, and the changes made. A new PR identity
+ * starts a new entry: head, stage, next action, QA and review request belong to the previous PR and are dropped.
+ */
+async function applyPr(record, a, options, actor) {
+  const changes = [];
+  let pr = a.pr ? { ...a.pr } : null;
+  if (options.repo || options.number) {
+    if (!REPO.test(options.repo ?? '') || !/^[1-9][0-9]*$/.test(options.number ?? '')) throw new UsageError('--repo <owner/name> and --number <n> go together');
+    const repo = options.repo.toLowerCase();
+    const number = Number(options.number);
+    const other = Object.values(record.assignments).find(x => x.id !== a.id && x.pr?.repo === repo && x.pr?.number === number);
+    if (other) throw new UsageError(`${repo}#${number} is already the PR of ${other.id}`);
+    if (!pr || pr.repo !== repo || pr.number !== number) {
+      if (pr) changes.push(`PR changed from ${pr.repo}#${pr.number}; its head, stage, next action, QA and review request were dropped`);
+      pr = { repo, number, head: null, stage: null, next: null, qa: null, reviewRequest: null };
+      changes.push(`PR ${repo}#${number}`);
+    }
+  }
+  if (!pr) throw new UsageError(`${a.id} has no PR yet: pass --repo and --number first`);
+  if (options.head) {
+    if (!SHA.test(options.head)) throw new UsageError('--head needs a commit sha');
+    pr.head = options.head; changes.push(`head ${short(options.head)}`);
+  }
+  if (options.stage) {
+    if (!STAGES.includes(options.stage)) throw new UsageError(`--stage is one of ${STAGES.join(', ')}`);
+    pr.stage = options.stage; changes.push(`stage ${options.stage}`);
+  }
+  if (options['clear-next']) { pr.next = null; changes.push('next action cleared'); }
+  if (options.next || options['next-owner']) {
+    if (!options.next || !options['next-owner']) throw new UsageError('--next and --next-owner go together: every next action has an owner');
+    pr.next = { action: options.next, owner: options['next-owner'] }; changes.push(`next: ${options.next} (${options['next-owner']})`);
+  }
+  if (options['qa-head']) {
+    if (!SHA.test(options['qa-head'])) throw new UsageError('--qa-head needs a commit sha');
+    pr.qa = { head: options['qa-head'], ref: options['qa-ref'] ? await fileRef(options['qa-ref']) : null, by: actor, at: now() };
+    changes.push(`QA on ${short(options['qa-head'])}`);
+  } else if (options['qa-ref']) throw new UsageError('--qa-ref goes with --qa-head');
+  if (options['review-request'] || options.thread || options['request-head']) {
+    if (!slackPermalink(options['review-request'] ?? '') || !/^\d+\.\d+$/.test(options.thread ?? '') || !SHA.test(options['request-head'] ?? '')) {
+      throw new UsageError('--review-request <Slack permalink>, --thread <ts like 1795170289.429709> and --request-head <sha> go together');
+    }
+    pr.reviewRequest = { permalink: options['review-request'], thread: options.thread, head: options['request-head'], by: actor, at: now() };
+    changes.push(`review requested at ${short(options['request-head'])}`);
+  }
+  if (!changes.length) throw new UsageError('pr needs something to change');
+  pr.updatedBy = actor;
+  pr.updatedAt = now();
+  return { pr, changes };
+}
+
+/** Refuse merge-ready unless GitHub and the proposed entry agree the PR is ready on its current head. */
+async function checkMergeReady(record, a, options, actor) {
+  const { pr } = await applyPr(record, a, options, actor);
+  let findings;
+  try {
+    findings = readinessFindings({ ...a, pr }, await fetchPr(pr.repo, pr.number));
+  } catch (error) {
+    throw new RecordError(`not recorded: the merge-readiness check for ${pr.repo}#${pr.number} could not run (${error.message})`, 'not-ready');
+  }
+  if (findings.length) throw new RecordError(`not recorded: ${pr.repo}#${pr.number} is not merge-ready:\n${findings.map(f => `- ${f}`).join('\n')}`, 'not-ready');
+}
+
 // ---------------------------------------------------------------- write commands
 
 const WRITES = {
@@ -299,6 +374,17 @@ const WRITES = {
     if (index < 0) throw new UsageError(`no pinned input ${options.label}`);
     a.inputs.splice(index, 1);
     change(a, actor, `unpinned input ${options.label}`);
+    return `${id} rev ${a.rev}`;
+  },
+
+  /** The landing-map entry: current values only, each replacing the last, so the map never accumulates a log. */
+  async pr(record, { positional: [id], options, context }, actor) {
+    const a = getAssignment(record, id);
+    checkRev(a, needRev(options));
+    if (context) checkObservedContext(a, context);
+    const { pr, changes } = await applyPr(record, a, options, actor);
+    a.pr = pr;
+    change(a, actor, changes.join('; '));
     return `${id} rev ${a.rev}`;
   },
 
@@ -484,6 +570,7 @@ function renderAssignment(record, v, { heading = '##' } = {}) {
   if (a.checkout) lines.push(`- Current source (observed now): ${describeState(v.current, a.checkout.coverage)}`);
   if (v.conflict) lines.push(`- Flag: ${v.conflict}`);
   lines.push(`- Brief: ${v.brief ? `${v.brief.path} (sha256 ${short(v.brief.sha256)}, ${v.brief.now})` : 'none recorded'}`);
+  if (a.pr) lines.push(`- PR: ${prLine(a.pr)}`);
   lines.push(`- Status: ${a.status ? `${a.status.text}${a.status.ref ? ` [${a.status.ref.path}]` : ''} (${a.status.by}, ${a.status.at})` : 'none'}`);
   for (const d of a.dependencies) lines.push(`- Dependency (${d.kind}): ${d.on}${d.assignment ? '' : ' (external)'}${d.note ? `: ${d.note}` : ''}`);
   for (const { input, status } of v.inputs) lines.push(`- Pinned input ${input.label}: ${status}${input.note ? `; ${input.note}` : ''}`);
@@ -498,6 +585,27 @@ function renderAssignment(record, v, { heading = '##' } = {}) {
     }
   }
   return lines.join('\n');
+}
+
+/** One PR's landing-map facts, with the mismatches a reader would otherwise have to spot. */
+export function prLine(pr) {
+  const parts = [`${pr.repo}#${pr.number}`, `head ${short(pr.head)}`, `stage ${pr.stage ?? 'unset'}`,
+    `next ${pr.next ? `${pr.next.action} (${pr.next.owner})` : 'none'}`];
+  parts.push(pr.qa ? `QA on ${short(pr.qa.head)}${pr.head && pr.qa.head !== pr.head ? ' (earlier head)' : ''}` : 'no QA recorded');
+  parts.push(pr.reviewRequest ? `review requested at ${short(pr.reviewRequest.head)}${pr.head && pr.reviewRequest.head !== pr.head ? ' (earlier head)' : ''}: ${pr.reviewRequest.permalink}` : 'no review request');
+  return parts.join('; ');
+}
+
+function landingRows(record) {
+  const rows = Object.values(record.assignments).filter(a => a.pr).sort((x, y) => x.id.localeCompare(y.id)).map(a => {
+    const { pr } = a;
+    const qa = pr.qa ? `${short(pr.qa.head)}${pr.head && pr.qa.head !== pr.head ? ' (earlier head)' : ''}` : '';
+    const request = pr.reviewRequest ? `[${short(pr.reviewRequest.head)}](${pr.reviewRequest.permalink})${pr.head && pr.reviewRequest.head !== pr.head ? ' (earlier head)' : ''}` : '';
+    return `| ${a.id} | ${pr.repo}#${pr.number} | ${short(pr.head)} | ${pr.stage ?? ''} | ${pr.next ? `${pr.next.action} (${pr.next.owner})` : ''} | ${qa} | ${request} |`;
+  });
+  if (!rows.length) return [];
+  return ['## Landing map', '', '| Assignment | PR | Head | Stage | Next action (owner) | QA head | Review request |',
+    '|---|---|---|---|---|---|---|', ...rows, ''];
 }
 
 // ---------------------------------------------------------------- brief restoration
@@ -601,7 +709,7 @@ const READS = {
     const rows = views.map(({ a, conflict }) => `| ${a.id} | ${a.parent ?? ''} | ${a.accountable.actor} | ${a.implementer?.session ?? ''} | `
       + `${a.checkout ? `${a.checkout.writer} @ ${a.checkout.path}` : ''} | ${a.status?.text ?? ''} | ${a.dependencies.map(d => `${d.kind}:${d.on}`).join(', ')}`
       + `${conflict ? ' | FLAG' : ' |'}`);
-    return ['# Coordination map', '', `Record rev ${record.rev}, generated ${now()}.`, '',
+    return ['# Coordination map', '', `Record rev ${record.rev}, generated ${now()}.`, '', ...landingRows(record),
       '| Assignment | Parent | Accountable | Implementer | Checkout writer | Status | Dependencies | Flags |',
       '|---|---|---|---|---|---|---|---|', ...rows, '', ...views.map(v => renderAssignment(record, v))].join('\n');
   },
@@ -649,12 +757,26 @@ export async function main(argv, env = process.env) {
     args.context = { rev: assignment.rev };
     args.subject = await subjectFrom(options, peek, assignment);
   }
+  // Merge-ready is checked against GitHub outside the lock, when it is set and when the facts it rests on (head, QA)
+  // change while it holds; the write then refuses if the entry changed meanwhile.
+  if (command === 'pr') {
+    const peek = await readRecord(path);
+    const assignment = getAssignment(peek, positional[0]);
+    const current = assignment.pr;
+    const proposed = (await applyPr(peek, assignment, options, actor)).pr;
+    const moved = current && (proposed.head !== current.head || proposed.qa?.head !== current.qa?.head);
+    if (proposed.stage === 'merge-ready' && (options.stage === 'merge-ready' || moved)) {
+      checkRev(assignment, needRev(options));
+      await checkMergeReady(peek, assignment, options, actor);
+      args.context = { rev: assignment.rev };
+    }
+  }
   const { result, rev } = await updateRecord(path, record => WRITES[command](record, args, actor),
     { actor, command, create: command === 'init' });
   return `${result} (record rev ${rev})`;
 }
 
-const EXIT = { conflict: 3, locked: 4, malformed: 5, missing: 6, exists: 7, io: 8, location: 9 };
+const EXIT = { conflict: 3, locked: 4, malformed: 5, missing: 6, exists: 7, io: 8, location: 9, 'not-ready': 10 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === (await import('node:fs')).realpathSync(process.argv[1])) {
   try {

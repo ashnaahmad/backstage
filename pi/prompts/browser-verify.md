@@ -27,5 +27,7 @@ Stop at each gate the brief defines, and before any state-changing step it has n
 
 At each gate, report briefly: what you did, what persisted and how you know, IDs, screenshot paths, discrepancies against the expected figures, and anything unresolved.
 
+Report to the owner your brief names, through the channel it names. Send each report once, with its content in the message rather than in a file written only to deliver it. A line in your own pane may point to the sent message but does not restate it. Report again only when the source, evidence, disposition, blocker or requested action changes. When you need the owner's answer, send the question and keep working in the same turn on whatever does not depend on it: you do nothing between turns, so ending a turn while saying you will keep working leaves you idle.
+
 Delegation brief:
 $ARGUMENTS
