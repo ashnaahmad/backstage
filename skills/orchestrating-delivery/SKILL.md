@@ -23,6 +23,7 @@ A passing check, a published commit, an idle session, a clean merge preview or a
 Follow an explicit user model choice; ask before substituting an unavailable model. Pass the model at launch and confirm it before dispatch.
 
 - Coordinators run in the project's main checkout. Implementers each get their own worktree; QA serves a detached worktree pinned to the exact commit under test, never the implementer's checkout.
+- Give each transient test export, merge rehearsal, or scratch build a unique directory. The command that creates it must register teardown immediately (a temporary-directory context manager or an exit trap with interrupt handling) and remove it on success, failure, or cancellation. Keep the evidence needed for handoff outside that directory. For a temporary Git worktree, register teardown through Git. On restart after a crash, check the exact directory owned by the interrupted run and finish its cleanup before retrying. Verify removal at handoff.
 - When the coordinator is supervising so much that it stops answering the user or updating the map, hand PRs to PR orchestrators. Its job is stack readiness.
 - Record, beside each role in the landing map, the session holding it and how to reach it. When roles become unclear, restate them before doing anything else.
 
