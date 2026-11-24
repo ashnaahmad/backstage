@@ -14,7 +14,9 @@ Both models completed a short authenticated request on
 The tracked [model settings](.pi/models.json) set both
 context windows to 1,050,000 tokens. The same override is
 kept for [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
-sessions without changing their selected model. Install them after
+sessions without changing their selected model, and for
+[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), whose
+documented window is also 1,050,000 (the generated catalog lists 272,000). Install them after
 cloning, including when using Pi outside this checkout:
 
 ```sh
