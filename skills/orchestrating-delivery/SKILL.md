@@ -1,6 +1,6 @@
 ---
 name: orchestrating-delivery
-description: Coordinate implementer, QA, review and relay sessions through implementation, live QA, publication, human review and landing of one or more PRs. Use when delegating delivery across agent sessions, running a PR stack, maintaining a landing map, routing review findings, or judging whether a PR or delegated session is finished.
+description: Coordinate implementer, QA, review and relay sessions through implementation, live QA, publication, human review and landing of a delivery large enough that the user reviewing each diff would be a bottleneck, such as a PR stack or a project's worth of PRs. Use when running such a delivery, maintaining its landing map, routing its review findings, or judging whether one of its PRs or delegated sessions is finished.
 ---
 
 # Orchestrating delivery
