@@ -14,7 +14,7 @@
     "openai/gpt-6.2-sol",
     "openai/gpt-6-luna",
     "openai/gpt-6.2-astra",
-    "antigravity/gemini-4-neon"
+    "google/gemini-4-neon"
   ],
   "defaultProvider": "claude-bridge",
   "defaultModel": "claude-opus-5-5",
