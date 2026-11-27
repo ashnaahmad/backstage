@@ -5,16 +5,7 @@ Read before launching a QA session. The project's QA skill governs how to run th
 ## Launching a QA session
 
 - Launch a new Pi session on Sol with `/browser-verify` and a brief naming the exact commit to test, the scenarios and the recipient for its report. QA serves a detached worktree at that commit, never the implementer's checkout, so the implementer keeps investigating and changing its own worktree meanwhile.
-- If the implementer's work is uncommitted, snapshot it as a commit without touching its checkout or index. In the implementer's worktree:
-
-  ```sh
-  export GIT_INDEX_FILE=$(mktemp -u)   # a temporary index; the real one is untouched
-  git read-tree HEAD && git add -A && tree=$(git write-tree); unset GIT_INDEX_FILE
-  commit=$(git commit-tree "$tree" -p HEAD -m "QA snapshot for <ticket>")
-  git update-ref refs/qa/<ticket> "$commit"   # keeps it from garbage collection
-  ```
-
-  QA serves a detached worktree at `$commit`.
+- If the intended change is still in the working tree, have the implementer commit it on its branch and give QA that SHA. Keep unrelated work out of the commit.
 - Scenarios come from the ticket's acceptance criteria and the implementer's handoff, phrased as what a user would do or type. A scenario that names internal functions or parameters skips the path users take.
 - A QA session reporting an unexpected sign-in page has a setup problem: fix the setup rather than asking the user to sign in.
 

@@ -36,19 +36,21 @@ Read the reference for the harness you are running in before launching or messag
 
 ## The loop for each PR
 
-1. **Implement.** The implementer works in its own worktree under `/implement` and code-quality, and hands over a commit with its evidence.
+1. **Implement.** The implementer works in its own worktree under `/implement` and code-quality, and makes small, coherent commits on its branch as it works. It hands QA the branch commit containing the completed change and its evidence.
 2. **QA.** A separate QA session runs the project's live-app QA on a pinned copy of the exact commit the implementer hands over, while the implementer keeps working in its own worktree: the original reproduction or new behaviour as a user would meet it, then a saved-state readback after reload. Read [live QA](references/live-qa.md) before launching one. Findings go back to the implementer; the repaired commit gets the affected checks again.
-3. **Evals, if the project gates on them.** Only after live QA has passed on the same commit. Each eval proposed names the scenario the change can alter; skip the rest. Do not gate a change on evals of behaviour it removes, and while the interface the evals exercise is still changing, do not rewrite them change by change.
-4. **Publish.** Commit and push the QA'd tree to the PR branch. Within the user's publication grant, do not ask again for each push. Fix or explain CI failures before review.
+3. **Evals, if the project gates on them.** Run applicable evals after live QA covers the candidate, including evidence carried forward under the live QA guidance. Each eval proposed names the scenario the change can alter; skip the rest. Do not gate a change on evals of behaviour it removes, and while the interface the evals exercise is still changing, do not rewrite them change by change.
+4. **Publish.** Push the verified branch head to the PR. Within the user's publication grant, do not ask again for each push. Fix or explain CI failures before review.
 5. **Request review.** The relay sends the request and reports its permalink. Publication is not review delivery.
 6. **Handle findings.** Every P1/P2 finding gets an owner who accepts it, a fix through steps 1–4, and an inline reply naming the fixing commit; then the relay asks for renewed review. A finding the implementer disputes goes back to the reviewer with evidence, or to the user for a ruling.
 7. **Land.** See readiness below.
+
+For a history-only split or rebase, compare the old and new tip trees (`git rev-parse <commit>^{tree}`) and verify the intended PR base. Record which existing results still cover the candidate. Intermediate commits need focused checks only where moving a change could break a dependency at that boundary. A split alone does not warrant repeating full suites, evals, live QA or independent reviews at every commit. If the trees differ, inspect the diff and rerun the checks it can invalidate. Preserve project requirements for final-head verification and review.
 
 Parent and child PRs proceed in parallel. While a parent waits for CI or review, the child integrates the parent's frozen head, resolves conflicts and runs its checks. When the parent lands, compare the landed commit with what the child integrated and rerun only what changed.
 
 ## Work in parallel unless a resource conflicts
 
-Run every check, review, investigation and QA preparation at once unless two operations demonstrably conflict over the same resource: a port, a mutable fixture, one account's saved app state, measured memory pressure. Then limit only those operations, give each a separate resource where one exists (another test account, port pair or checkout), and say when the limit ends.
+Run the selected independent checks, reviews, investigations and QA preparations concurrently unless two operations demonstrably conflict over the same resource: a port, a mutable fixture, one account's saved app state, measured memory pressure. Then limit only those operations, give each a separate resource where one exists (another test account, port pair or checkout), and say when the limit ends.
 
 None of these is a reason to wait: a "QA slot" for anything other than live QA, local tests or typechecks in other checkouts, remote CI, a parent awaiting review, an investigation that only reads code and captures. Do not relay take-and-release messages between sessions over a shared resource; give them separate resources or let them coordinate directly.
 
